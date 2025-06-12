@@ -6,6 +6,16 @@
 
 / {
 	model = "Milk-V DuoS";
+
+
+        leds {
+                compatible = "gpio-leds";
+
+                led-user {
+                        gpios = <&porta 29 GPIO_ACTIVE_HIGH>;
+                        linux,default-trigger = "activity";
+                };
+        };
 };
 
 &mipi_rx {

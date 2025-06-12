@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# Changed to Linux LED driver
+exit 0
+
 LED_PIN=509
 
 LED_GPIO=/sys/class/gpio/gpio${LED_PIN}
