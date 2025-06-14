@@ -8,6 +8,8 @@
 #ifndef __CV181X_ASIC_H__
 #define __CV181X_ASIC_H__
 
+#define SET_VO_BG_BLACK "setvobg 0 0x00000000;"
+
 #include <../../../board/cvitek/cv181x/cv181x_reg.h>
 
 /* defined in cvipart.h */
@@ -293,7 +295,7 @@
 		#else
 			#define LOAD_LOGO "mmc dev 0;mmc read " LOGO_READ_ADDR " ${MISC_PART_OFFSET} ${MISC_PART_SIZE};"
 		#endif
-		#define SHOWLOGOCOMMAND LOAD_LOGO CVI_JPEG START_VO START_VL SET_VO_BG
+		#define SHOWLOGOCOMMAND LOAD_LOGO CVI_JPEG START_VO START_VL SET_VO_BG_BLACK
 	#else
 		#define SHOWLOGOCMD
 	#endif
