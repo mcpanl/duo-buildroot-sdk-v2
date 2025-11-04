@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cvi_mpi/sample/lv_port_linux" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cvi_mpi/sample/lv_port_linux/lvgl" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cvi_mpi/sample/lvgl_demo/lvgl" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cvi_mpi/sample/lvgl_demo_console/lvgl" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cvi_mpi/sample/lvgl_vi_demo/lvgl" vcs="Git" />
+  </component>
+</project>

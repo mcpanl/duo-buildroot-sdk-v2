@@ -6,6 +6,15 @@
 
 / {
 	model = "Milk-V DuoS";
+
+	leds {
+		compatible = "gpio-leds";
+		led-user {
+			gpios = <&porta 29 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "activity";
+		};
+	};
+
 };
 
 &mipi_rx {
@@ -31,11 +40,13 @@
 &i2c4 {
 	status = "okay";
 
-	gt9xx: gt9xx@14 {
-		compatible = "goodix,gt9xx";
+	gt911: gt911@14 {
+		compatible = "goodix,gt911";
 		reg = <0x14>;
-		goodix,irq-gpio = <&porta 18 0>;
-		goodix,rst-gpio = <&porta 19 GPIO_ACTIVE_HIGH>;
+		interrupt-parent = <&porta>;
+		interrupts = <18 IRQ_TYPE_EDGE_FALLING>;
+		goodix,irq-gpio = <&porta 18 IRQ_TYPE_EDGE_FALLING>;
+		goodix,rst-gpio = <&porta 19 GPIO_ACTIVE_LOW>;
 		status = "okay";
 	};
 };
@@ -53,6 +64,7 @@
 	/delete-property/ mute-gpio-r;
 };
 
+#if 0
 /* mipi dsi for u-boot */
 &vo {
 	compatible = "cvitek,vo";
@@ -69,6 +81,35 @@
 	pwm-gpio = <&porte 0 GPIO_ACTIVE_HIGH>;
 	power-ct-gpio = <&porte 1 GPIO_ACTIVE_HIGH>;
 	status = "okay";
+};
+#endif
+
+/* mipi dsi for u-boot */
+&vo {
+        compatible = "cvitek,vo";
+#ifndef __UBOOT__
+        /delete-property/ reset-gpio;
+        /delete-property/ pwm-gpio;
+#else
+        reset-gpio = <&porte 2 GPIO_ACTIVE_LOW>;
+        pwm-gpio = <&porte 0 GPIO_ACTIVE_HIGH>; // uboot阶段用作GPIO
+#endif
+        power-ct-gpio = <&porte 1 GPIO_ACTIVE_HIGH>;
+        status = "okay";
+};
+
+/* mipi dsi for kernel */
+&mipi_tx {
+        compatible = "cvitek,mipi_tx";
+#ifndef __UBOOT__
+        reset-gpio = <&porte 2 GPIO_ACTIVE_LOW>;
+        pwm-gpio = <&porte 0 GPIO_ACTIVE_HIGH>; // kernel阶段作为PWM
+#else
+        /delete-property/ reset-gpio;
+        /delete-property/ pwm-gpio;
+#endif
+        power-ct-gpio = <&porte 1 GPIO_ACTIVE_HIGH>;
+        status = "okay";
 };
 
 &wifisd {
@@ -107,3 +148,16 @@
 &uart4 {
 	status = "okay";
 };
+
+&pwm0 {
+        status = "okay";
+};
+
+&pwm1 {
+      status = "okay";
+};
+
+&pwm2 {
+      status = "okay";
+};
+

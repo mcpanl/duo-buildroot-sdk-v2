@@ -28,7 +28,7 @@ function milkv_build()
     rm -rf ${OUTPUT_DIR}/*
   fi
    
-  clean_all
+  #clean_all
   build_all
   if [ $? -eq 0 ]; then
     print_info "Build board ${MILKV_BOARD} success!"
@@ -65,7 +65,12 @@ function milkv_pack_emmc()
 
   if [ -f "${img_in}" ]; then
     mv ${img_in} out/${img_out}
+
     print_info "Create eMMC image successful: out/${img_out}"
+    sudo mkdir -p /mnt/hdd4t/milkv-emmc/
+    sudo rm -rf /mnt/hdd4t/milkv-emmc/*
+    sudo cp "out/${img_out}" /mnt/hdd4t/
+    sudo unzip -o "/mnt/hdd4t/${img_out}" -d /mnt/hdd4t/milkv-emmc-arm64/
   else
     print_err "Create eMMC image failed!"
     exit 1

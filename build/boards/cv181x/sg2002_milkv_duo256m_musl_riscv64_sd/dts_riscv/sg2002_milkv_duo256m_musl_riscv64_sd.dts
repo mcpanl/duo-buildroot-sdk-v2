@@ -4,8 +4,35 @@
 #include "cv181x_asic_sd.dtsi"
 #include "cv181x_default_memmap.dtsi"
 
+
 / {
 	model = "Milk-V Duo256M";
+
+        leds {
+                compatible = "gpio-leds";
+                led-user-milkv {
+                        gpios = <&porte 2 GPIO_ACTIVE_HIGH>;
+                        linux,default-trigger = "none";
+                };
+
+                led-user-maix {
+                        gpios = <&porta 14 GPIO_ACTIVE_HIGH>;
+                        linux,default-trigger = "activity";
+                };
+        };
+
+	gpio-keys {
+    		compatible = "gpio-keys";
+
+    		user-button {
+        		label = "user-button";
+        		linux,code = <28>;
+        		gpios = <&porta 30 GPIO_ACTIVE_LOW>;
+        		debounce-interval = <10>;
+			wakeup-source;
+    		};
+	};
+
 };
 
 &mipi_rx {

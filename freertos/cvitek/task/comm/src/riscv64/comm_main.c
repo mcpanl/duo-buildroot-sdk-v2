@@ -20,7 +20,7 @@
 #include "comm.h"
 #include "cvi_spinlock.h"
 
-//#define __DEBUG__
+#define __DEBUG__
 
 #ifdef __DEBUG__
 #define debug_printf printf
@@ -143,11 +143,43 @@ do { \
 
 DEFINE_CVI_SPINLOCK(mailbox_lock, SPIN_MBOX);
 
+int led_count = 0;
+
+void vLedTask()
+{
+	printf(">>> create led task\n");
+
+	while(1) {
+		printf(">>> led task count=%ld\n", led_count);
+
+		if(led_count%2==0)
+		{
+			duo_led_control(1);
+		} else {
+			duo_led_control(0);
+		}
+
+		led_count++;
+
+		vTaskDelay(1000 / portTICK_PERIOD_MS); 
+	}
+}
+
 void main_cvirtos(void)
 {
 	printf("create cvi task\n");
 
 	request_irq(MBOX_INT_C906_2ND, prvQueueISR, 0, "mailbox", (void *)0);
+
+	    xTaskCreate(
+        	vLedTask,        // 任务函数
+        	"LedTask",       // 任务名字
+        	128,            // 堆栈大小（字数）
+        	NULL,           // 参数
+        	1,              // 优先级
+        	NULL            // 不需要任务句柄
+	    );
+
 
 #ifdef FAST_IMAGE_ENABLE
 	start_camera(0);
@@ -267,6 +299,19 @@ void prvCmdQuRunTask(void *pvParameters)
 					// all isr of ip is disabled, and send msg back to linux
 					rtos_cmdq.ip_id = IP_SYSTEM;
 				}
+			case CMD_DUO_LED:
+				rtos_cmdq.cmd_id = CMD_DUO_LED;
+				printf("recv cmd(%d) from C906B, param_ptr [0x%x]\n", rtos_cmdq.cmd_id, rtos_cmdq.param_ptr);
+				if (rtos_cmdq.param_ptr == DUO_LED_ON) {
+					duo_led_control(1);
+				} else {
+					duo_led_control(0);
+				}
+				rtos_cmdq.param_ptr = DUO_LED_DONE;
+				rtos_cmdq.resv.valid.rtos_valid = 1;
+				rtos_cmdq.resv.valid.linux_valid = 0;
+				printf("recv cmd(%d) from C906B...send [0x%x] to C906B\n", rtos_cmdq.cmd_id, rtos_cmdq.param_ptr);
+				goto send_label;
 			case SYS_CMD_INFO_LINUX:
 			default:
 send_label:

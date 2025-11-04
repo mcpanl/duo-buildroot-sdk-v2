@@ -1335,4 +1335,9 @@ config TOUCHSCREEN_ZINITIX
 	  To compile this driver as a module, choose M here: the
 	  module will be called zinitix.
 
+config TOUCHSCREEN_GT
+	tristate "GT support"
+	depends on I2C
+	help
+	  Custom GT y
 endif

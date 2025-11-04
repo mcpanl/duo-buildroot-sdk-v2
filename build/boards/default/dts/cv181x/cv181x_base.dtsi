@@ -312,6 +312,7 @@
 			#gpio-cells = <2>;
 			snps,nr-gpios = <32>;
 			reg = <0>;
+			#interrupt-cells = <2>;
 		};
 	};
 
