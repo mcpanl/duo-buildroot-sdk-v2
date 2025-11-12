@@ -1,0 +1,3 @@
+/home/satuo/milkv/duo-buildroot-sdk-v2/cvi_mpi/sample/lvgl_demo/build/CMakeFiles/lvgl_example.dir
+/home/satuo/milkv/duo-buildroot-sdk-v2/cvi_mpi/sample/lvgl_demo/build/CMakeFiles/edit_cache.dir
+/home/satuo/milkv/duo-buildroot-sdk-v2/cvi_mpi/sample/lvgl_demo/build/CMakeFiles/rebuild_cache.dir

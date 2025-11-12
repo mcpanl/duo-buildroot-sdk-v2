@@ -23,6 +23,6 @@
 #endif
 
 #define START_VL "startvl 0 " LOGO_READ_ADDR " " LOGO_RESERVED_ADDR " " LOGOSIZE " " VO_ALIGNMENT ";"
-#define SET_VO_BG "setvobg 0 0xffffffff;"
+#define SET_VO_BG "setvobg 0 0x00000000;"
 
 #endif

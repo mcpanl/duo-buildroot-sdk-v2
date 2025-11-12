@@ -5,7 +5,27 @@
 #include "cv181x_default_memmap.dtsi"
 
 / {
-	model = "Milk-V DuoS";
+	model = "zcam";
+
+	leds {
+		compatible = "gpio-leds";
+		led-user {
+			gpios = <&porta 29 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "activity";
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		user-button {
+			label = "user-button";
+			linux,code = <28>;
+			gpios = <&portb 4 GPIO_ACTIVE_LOW>;
+			debounce-interval = <10>;
+			wakeup-source;
+		};
+	};
 };
 
 &mipi_rx {
@@ -35,10 +55,41 @@
 		compatible = "goodix,gt9xx";
 		reg = <0x14>;
 		goodix,irq-gpio = <&porta 18 0>;
-		goodix,rst-gpio = <&porta 19 GPIO_ACTIVE_HIGH>;
+		goodix,rst-gpio = <&porta 19 0>;
+		status = "okay";
+	};
+
+	hynitron: hynitron@5a {
+		compatible = "hynitron,hyn_ts", "hyn,7xx";
+		reg = <0x5a>;
+		irq-gpio = <&porta 18 0>;
+		hynitron,irq-gpio = <&porta 18 0>;
+		reset-gpio = <&porta 19 0>;
+		hynitron,reset-gpio = <&porta 19 0>;
+		max-touch-number = <5>;
+		hynitron,max-touch-number = <5>;
+		display-coords = <0 0 368 552>;
+		hynitron,display-coords = <368 552>;
+		pos-swap = <0>;
+		posx-reverse = <0>;
+		posy-reverse = <1>;
 		status = "okay";
 	};
 };
+
+//&i2c4 {
+//	status = "okay";
+//
+//	gt911: gt911@14 {
+//		compatible = "goodix,gt911";
+//		reg = <0x14>;
+//		interrupt-parent = <&porta>;
+//		interrupts = <18 IRQ_TYPE_EDGE_FALLING>;
+//		goodix,irq-gpio = <&porta 18 IRQ_TYPE_EDGE_FALLING>;
+//		goodix,rst-gpio = <&porta 19 GPIO_ACTIVE_LOW>;
+//		status = "okay";
+//	};
+//};
 
 &spi3 {
 	status = "okay";
