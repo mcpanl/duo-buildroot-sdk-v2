@@ -101,6 +101,10 @@ void VpssEngine::attachVBPool(VB_POOL pool_id) { m_vbpool_id = pool_id; }
 VB_POOL VpssEngine::getVBPool() const { return m_vbpool_id; }
 
 int VpssEngine::stop() {
+    LOGI(">>> TDL_SDK VPSS Stop do nothing.\n");
+    return CVI_SUCCESS;
+
+#if 0
   if (!m_is_vpss_init) {
     LOGI("Cannot stop Vpss because it's not initalized yet.\n");
     return CVI_SUCCESS;
@@ -128,6 +132,7 @@ int VpssEngine::stop() {
 
   m_is_vpss_init = false;
   return CVI_SUCCESS;
+#endif
 }
 
 VPSS_GRP VpssEngine::getGrpId() {
