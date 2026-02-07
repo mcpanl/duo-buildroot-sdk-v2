@@ -5,42 +5,180 @@
 #include "cv181x_default_memmap.dtsi"
 
 / {
-	model = "Milk-V Duo256M";
+	model = "zcam";
+
+	leds {
+		compatible = "gpio-leds";
+		led-user {
+			gpios = <&porta 23 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "activity";
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		user-button {
+			label = "user-button";
+			linux,code = <28>;
+			gpios = <&porta 30 GPIO_ACTIVE_LOW>;
+			debounce-interval = <10>;
+			wakeup-source;
+		};
+	};
 };
 
+
+/* mipi dsi for u-boot */
+&vo {
+	compatible = "cvitek,vo";
+	reset-gpio = <&porta 5 GPIO_ACTIVE_LOW>;
+	pwm-gpio = <&porta 24 GPIO_ACTIVE_HIGH>;
+
+	/delete-property/ power-ct-gpio;
+
+	status = "okay";
+};
+
+/* mipi dsi for kernel */
+&mipi_tx {
+	compatible = "cvitek,mipi_tx";
+	reset-gpio = <&porta 5 GPIO_ACTIVE_LOW>;
+	pwm-gpio = <&porta 24 GPIO_ACTIVE_HIGH>;
+
+	/delete-property/ power-ct-gpio;
+
+	status = "okay";
+};
+
+
 &mipi_rx {
-	snsr-reset = <&portc 17 GPIO_ACTIVE_LOW>, <&portc 17 GPIO_ACTIVE_LOW>, <&portc 17 GPIO_ACTIVE_LOW>;
+	snsr-reset = <&portb 3 GPIO_ACTIVE_LOW>, <&portb 3 GPIO_ACTIVE_LOW>, <&portb 3 GPIO_ACTIVE_LOW>;
 };
 
 &i2c0 {
 	status = "disabled";
+	/delete-property/ scl-pinmux;
+	/delete-property/ sda-pinmux;
+	/delete-property/ scl-gpios;
+	/delete-property/ sda-gpios;
 };
+
+&i2c1 {
+	status = "disabled";
+	/delete-property/ scl-pinmux;
+	/delete-property/ sda-pinmux;
+	/delete-property/ scl-gpios;
+	/delete-property/ sda-gpios;
+};
+&i2c2 {
+	status = "disabled";
+	/delete-property/ scl-pinmux;
+	/delete-property/ sda-pinmux;
+	/delete-property/ scl-gpios;
+	/delete-property/ sda-gpios;
+};
+
+&i2c3 {
+	status = "disabled";
+	/delete-property/ scl-pinmux;
+	/delete-property/ sda-pinmux;
+	/delete-property/ scl-gpios;
+	/delete-property/ sda-gpios;
+};
+
 
 &i2c4 {
-	status = "disabled";
-};
-
-&spi2 {
 	status = "okay";
 
-	spidev@0 {
+	gt9xx: gt9xx@14 {
+		compatible = "goodix,gt9xx";
+		reg = <0x14>;
+		goodix,irq-gpio = <&porta 18 0>;
+		goodix,rst-gpio = <&porta 19 0>;
+		status = "okay";
+	};
+
+	hynitron: hynitron@5a {
+		compatible = "hynitron,hyn_ts", "hyn,7xx";
+		reg = <0x5a>;
+		irq-gpio = <&porta 18 0>;
+		hynitron,irq-gpio = <&porta 18 0>;
+		reset-gpio = <&porta 19 0>;
+		hynitron,reset-gpio = <&porta 19 0>;
+		max-touch-number = <5>;
+		hynitron,max-touch-number = <5>;
+		display-coords = <0 0 368 552>;
+		hynitron,display-coords = <368 552>;
+		pos-swap = <0>;
+		posx-reverse = <0>;
+		posy-reverse = <1>;
 		status = "okay";
 	};
 };
 
+&spi0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi2 {
+	status = "disabled";
+
+	spidev@0 {
+		status = "disabled";
+	};
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+
 &dac {
-	mute-gpio-r = <&porte 1 GPIO_ACTIVE_LOW>;
+	status = "okay";
+	/delete-property/ mute-gpio-r;
+};
+
+
+&pwm0 {
+	status = "disabled";
+};
+
+&pwm1 {
+	status = "disabled";
+};
+
+&pwm2 {
+	status = "disabled";
+};
+
+&uart0 {
+	clocks = <&clk CV181X_CLK_UART0>;
+	/delete-property/ clock-frequency;
 };
 
 &uart1 {
+	clocks = <&clk CV181X_CLK_UART1>;
+	/delete-property/ clock-frequency;
 	status = "okay";
 };
 
 &uart2 {
+	clocks = <&clk CV181X_CLK_UART2>;
+	/delete-property/ clock-frequency;
 	status = "okay";
 };
 
 &uart3 {
+	clocks = <&clk CV181X_CLK_UART3>;
+	/delete-property/ clock-frequency;
 	status = "okay";
 };
 
+&fb_reserved {
+	status = "disabled";
+};
