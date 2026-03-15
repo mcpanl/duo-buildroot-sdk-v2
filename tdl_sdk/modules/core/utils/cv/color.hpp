@@ -2,6 +2,8 @@
 #define _UTILS_CV_IMGPROC_COLOR_HPP_
 
 #include "opencv2/core.hpp"
+// OpenCV 4.x no longer auto-includes C API types via core.hpp
+#include "opencv2/core/core_c.h"
 
 // clang-format off
 

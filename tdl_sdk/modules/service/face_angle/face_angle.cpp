@@ -1,8 +1,8 @@
 #include "face_angle.hpp"
 #include <cmath>
 #include "core/core/cvtdl_errno.h"
-// include core_c.h if opencv version greater than 4.5
-#if CV_VERSION_MAJOR >= 4 && CV_VERSION_MINOR >= 5
+// OpenCV 4.x no longer auto-includes core_c.h (still present in 4.0.x-4.4.x)
+#if CV_VERSION_MAJOR >= 4
 #include "opencv2/core/core_c.h"
 #endif
 

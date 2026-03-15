@@ -651,6 +651,7 @@ ifeq ($(CONFIG_BUILDROOT_FS),y)
 	${Q}ln -s $(OUTPUT_DIR)/br-rootfs $(OUTPUT_DIR)/fs
 	${Q}mkdir $(OUTPUT_DIR)/br-rootfs
 	${Q}tar xf $(BR_DIR)/output/$(BR_BOARD)/images/rootfs.tar.xz -C $(OUTPUT_DIR)/br-rootfs
+	${Q}$(TOP_DIR)/scripts/build-python3.11.sh $(BR_BOARD) 3.11.6 $(OUTPUT_DIR)/br-rootfs
 else
 	${Q}ln -s $(OUTPUT_DIR)/rootfs $(OUTPUT_DIR)/fs
 endif

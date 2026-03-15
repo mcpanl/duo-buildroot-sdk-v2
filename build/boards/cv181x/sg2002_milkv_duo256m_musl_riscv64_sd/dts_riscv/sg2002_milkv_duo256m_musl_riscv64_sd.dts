@@ -3,14 +3,13 @@
 #include "cv181x_asic_qfn.dtsi"
 #include "cv181x_asic_sd.dtsi"
 #include "cv181x_default_memmap.dtsi"
-
 / {
 	model = "zcam";
 
 	leds {
 		compatible = "gpio-leds";
 		led-user {
-			gpios = <&porta 23 GPIO_ACTIVE_HIGH>;
+			gpios = <&porta 29 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "activity";
 		};
 	};
@@ -21,72 +20,32 @@
 		user-button {
 			label = "user-button";
 			linux,code = <28>;
-			gpios = <&porta 30 GPIO_ACTIVE_LOW>;
+			gpios = <&portb 4 GPIO_ACTIVE_LOW>;
 			debounce-interval = <10>;
 			wakeup-source;
 		};
 	};
 };
 
-
-/* mipi dsi for u-boot */
-&vo {
-	compatible = "cvitek,vo";
-	reset-gpio = <&porta 5 GPIO_ACTIVE_LOW>;
-	pwm-gpio = <&porta 24 GPIO_ACTIVE_HIGH>;
-
-	/delete-property/ power-ct-gpio;
-
-	status = "okay";
-};
-
-/* mipi dsi for kernel */
-&mipi_tx {
-	compatible = "cvitek,mipi_tx";
-	reset-gpio = <&porta 5 GPIO_ACTIVE_LOW>;
-	pwm-gpio = <&porta 24 GPIO_ACTIVE_HIGH>;
-
-	/delete-property/ power-ct-gpio;
-
-	status = "okay";
-};
-
-
 &mipi_rx {
-	snsr-reset = <&portb 3 GPIO_ACTIVE_LOW>, <&portb 3 GPIO_ACTIVE_LOW>, <&portb 3 GPIO_ACTIVE_LOW>;
+	snsr-reset = <&porta 2 GPIO_ACTIVE_LOW>, <&porta 2 GPIO_ACTIVE_LOW>, <&porta 2 GPIO_ACTIVE_LOW>;
 };
 
 &i2c0 {
 	status = "disabled";
-	/delete-property/ scl-pinmux;
-	/delete-property/ sda-pinmux;
-	/delete-property/ scl-gpios;
-	/delete-property/ sda-gpios;
 };
 
 &i2c1 {
-	status = "disabled";
-	/delete-property/ scl-pinmux;
-	/delete-property/ sda-pinmux;
-	/delete-property/ scl-gpios;
-	/delete-property/ sda-gpios;
+	status = "okay";
 };
+
 &i2c2 {
-	status = "disabled";
-	/delete-property/ scl-pinmux;
-	/delete-property/ sda-pinmux;
-	/delete-property/ scl-gpios;
-	/delete-property/ sda-gpios;
+	status = "okay";
 };
 
 &i2c3 {
-	status = "disabled";
-	/delete-property/ scl-pinmux;
-	/delete-property/ sda-pinmux;
-	/delete-property/ scl-gpios;
-	/delete-property/ sda-gpios;
+	status = "okay";
 };
-
 
 &i2c4 {
 	status = "okay";
@@ -117,68 +76,84 @@
 	};
 };
 
-&spi0 {
-	status = "disabled";
-};
+//&i2c4 {
+//	status = "okay";
+//
+//	gt911: gt911@14 {
+//		compatible = "goodix,gt911";
+//		reg = <0x14>;
+//		interrupt-parent = <&porta>;
+//		interrupts = <18 IRQ_TYPE_EDGE_FALLING>;
+//		goodix,irq-gpio = <&porta 18 IRQ_TYPE_EDGE_FALLING>;
+//		goodix,rst-gpio = <&porta 19 GPIO_ACTIVE_LOW>;
+//		status = "okay";
+//	};
+//};
 
-&spi1 {
-	status = "disabled";
-};
-
-&spi2 {
-	status = "disabled";
+&spi3 {
+	status = "okay";
 
 	spidev@0 {
-		status = "disabled";
+		status = "okay";
 	};
 };
 
-&spi3 {
-	status = "disabled";
-};
-
-
 &dac {
-	status = "okay";
+	/delete-property/ mute-gpio-l;
 	/delete-property/ mute-gpio-r;
 };
 
-
-&pwm0 {
-	status = "disabled";
+/* mipi dsi for u-boot */
+&vo {
+	compatible = "cvitek,vo";
+	reset-gpio = <&porte 2 GPIO_ACTIVE_LOW>;
+	pwm-gpio = <&porte 0 GPIO_ACTIVE_HIGH>;
+	power-ct-gpio = <&porte 1 GPIO_ACTIVE_HIGH>;
+	status = "okay";
 };
 
-&pwm1 {
-	status = "disabled";
+/* mipi dsi for kernel */
+&mipi_tx {
+	compatible = "cvitek,mipi_tx";
+	reset-gpio = <&porte 2 GPIO_ACTIVE_LOW>;
+	pwm-gpio = <&porte 0 GPIO_ACTIVE_HIGH>;
+	power-ct-gpio = <&porte 1 GPIO_ACTIVE_HIGH>;
+	status = "okay";
 };
 
-&pwm2 {
-	status = "disabled";
+&wifisd {
+	status = "okay";
+	cap-sd-highspeed;
+	sd-uhs-sdr25;
+	sd-uhs-ddr50;
+	sd-uhs-sdr104;
+	min-frequency = <400000>;
+	max-frequency = <187500000>;
 };
 
-&uart0 {
-	clocks = <&clk CV181X_CLK_UART0>;
-	/delete-property/ clock-frequency;
+&wifi_pin {
+	status = "okay";
+	compatible = "cvitek,wifi-pin";
+	poweron-gpio = <&porta 15 GPIO_ACTIVE_HIGH>;
+	wakeup-gpio = <&porte 7 GPIO_ACTIVE_HIGH>;
+};
+
+&usb {
+	vbus-gpio = <&portb 6 0>;
 };
 
 &uart1 {
-	clocks = <&clk CV181X_CLK_UART1>;
-	/delete-property/ clock-frequency;
 	status = "okay";
 };
 
 &uart2 {
-	clocks = <&clk CV181X_CLK_UART2>;
-	/delete-property/ clock-frequency;
 	status = "okay";
 };
 
 &uart3 {
-	clocks = <&clk CV181X_CLK_UART3>;
-	/delete-property/ clock-frequency;
 	status = "okay";
 };
 
-&fb_reserved {
-	status = "disabled";
+&uart4 {
+	status = "okay";
 };

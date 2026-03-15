@@ -1,6 +1,6 @@
 #pragma once
 #include "core/face/cvtdl_face_types.h"
-#include "opencv2/core/core.hpp"
+#include "opencv2/core.hpp"
 
 namespace cvitdl {
 namespace service {

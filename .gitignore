@@ -22,3 +22,7 @@ ncscope.*
 
 __pycache__
 .vscode
+
+# Large generated/downloaded artifacts (do not commit)
+build/python3-3.11.6-extra/build-cross/libpython3.11.a
+dl/micropython/micropython-1.22.0.tar.xz

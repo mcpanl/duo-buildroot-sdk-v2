@@ -1,215 +1,64 @@
-#if 0
-int cvi_board_init(void)
+static void set_rtc_register_for_power(void)
 {
-	// USER_LED
-	PINMUX_CONFIG(EMMC_CMD, XGPIOA_23);
+	printf("set_rtc_register_for_power\n");
 
-	// USER_BUTTON
-	PINMUX_CONFIG(AUX0, XGPIOA_30);
-
-	// LCD
-	PINMUX_CONFIG(IIC3_SCL, XGPIOA_5);
-	PINMUX_CONFIG(EMMC_DAT1, XGPIOA_24);
-
-	// CAMERA
-	PINMUX_CONFIG(ADC1, XGPIOB_3);
-	PINMUX_CONFIG(PAD_MIPIRX3N, CAM_MCLK0);
-	PINMUX_CONFIG(PWR_BUTTON1, IIC4_SDA);
-	PINMUX_CONFIG(PWR_WAKEUP0, IIC4_SCL);
-
-
-
-
-    return 0;
-}
-#endif
-
-
-__attribute__((optimize("O0")))
-// 1.26ms
-void suck_loop(uint64_t loop) {
-        loop = loop * 50 * 100;
-        uint64_t a;
-        while (loop > 0) {
-                a = loop / (uint64_t)99;
-                a = loop / (uint64_t)77;
-                a = loop / (uint64_t)55;
-                a = loop / (uint64_t)33;
-                a = loop / (uint64_t)11;
-                a = loop / (uint64_t)999;
-                a = loop / (uint64_t)777;
-                a = loop / (uint64_t)555;
-                a = loop / (uint64_t)333;
-                a = loop / (uint64_t)111;
-                a = loop / (uint64_t)9999;
-                a = loop / (uint64_t)7777;
-                a = loop / (uint64_t)5555;
-                a = loop / (uint64_t)3333;
-                a = loop / (uint64_t)1111;
-                a = loop / (uint64_t)99999;
-                a = loop / (uint64_t)77777;
-                a = loop / (uint64_t)55555;
-                a = loop / (uint64_t)33333;
-                a = loop / (uint64_t)11111;
-                loop--;
-        }
-}
-
-static inline void user_led_on(void) {
-	uint32_t val;
-
-        val = mmio_read_32(0x03020000);
-        val |= (1 << 23);
-        mmio_write_32(0x03020000, val);
-}
-
-static inline void user_led_off(void) {
-	uint32_t val;
-
-        val = mmio_read_32(0x03020000);
-        val &= ~(1 << 23);
-        mmio_write_32(0x03020000, val);
-}
-
-static inline void user_led_toggle(void) {
-	uint32_t val;
-
-        val = mmio_read_32(0x03020000);
-        val ^= (1 << 23);
-        mmio_write_32(0x03020000, val);
+	// Reset Key
+	mmio_write_32(0x050260D0, 0x7);
 }
 
 int cvi_board_init(void)
 {
-#if 1
-	uint32_t val;
+	// Camera0
+	PINMUX_CONFIG(IIC3_SCL, IIC3_SCL);
+	PINMUX_CONFIG(IIC3_SDA, IIC3_SDA);
+	PINMUX_CONFIG(CAM_MCLK0, CAM_MCLK0); // Sensor0 MCLK
+	PINMUX_CONFIG(CAM_RST0, XGPIOA_2);   // Sensor0 RESET
 
+	// Camera1
+	PINMUX_CONFIG(IIC2_SDA, IIC2_SDA);
+	PINMUX_CONFIG(IIC2_SCL, IIC2_SCL);
+	PINMUX_CONFIG(CAM_MCLK1, CAM_MCLK1); // Sensor1 MCLK
+	PINMUX_CONFIG(CAM_PD1, XGPIOA_4);    // Sensor1 RESET
 
-	// user led
-	mmio_write_32(0x0300105C, 0x3); // GPIOA 23 GPIO_MODE
-	val = mmio_read_32(0x03020004); // GPIOA DIR
-	val |= (1 << 23); // output
-	mmio_write_32(0x03020004, val);
-	user_led_toggle();
+	// LED
+	PINMUX_CONFIG(IIC0_SDA, XGPIOA_29);
 
-	// lcd reset
-	// mmio_write_32(0x030010A4, 0x0); // PWRGPIO 0 GPIO_MODE
-	mmio_write_32(0x0300103C,0x3); //SPK_EN XGPIOA 15
+	// I2C4 for TP
+	PINMUX_CONFIG(VIVO_D1, IIC4_SCL);
+	PINMUX_CONFIG(VIVO_D0, IIC4_SDA);
 
-	// tp function
-	mmio_write_32(0x03001050, 0x03); // GPIOA 22 GPIO_MODE
-	mmio_write_32(0x03001058, 0x03); // GPIOA 27 GPIO_MODE 23tpreset
-	mmio_write_32(0x05027078, 0x11);// Unlock PWR_GPIO[3]
-	mmio_write_32(0x0502707c, 0x11);// Unlock PWR_GPIO[4]
+	// TP INT
+	PINMUX_CONFIG(JTAG_CPU_TCK, XGPIOA_18);
+	// TP Reset
+	PINMUX_CONFIG(JTAG_CPU_TMS, XGPIOA_19);
 
-	// wifi power reset
-	mmio_write_32(0x0300104C, 0x3); // GPIOA 26
-	mmio_write_32(0x03001054, 0x3); // GPIOA 25
-	val = mmio_read_32(0x03020004); // GPIOA DIR
-	val |= (1 << 26); // output
-	val |= (1 << 27); // output
-	val |= (1 << 25); // output
-	val |= (1 << 15); // output
-	mmio_write_32(0x03020004, val);
+	// SPI3
+	PINMUX_CONFIG(VIVO_D8, SPI3_SDO);
+	PINMUX_CONFIG(VIVO_D7, SPI3_SDI);
+	PINMUX_CONFIG(VIVO_D6, SPI3_SCK);
+	PINMUX_CONFIG(VIVO_D5, SPI3_CS_X);
 
-	val = mmio_read_32(0x03020000); // signal level
-	val &= ~(1 << 26); // set level to low
-	val &= ~(1 << 27); // set level to low
-	val &= ~(1 << 25); // set level to low
-	val &= ~(1 << 15); // set level to low
-	mmio_write_32(0x03020000, val);
+	// USB
+	PINMUX_CONFIG(USB_VBUS_EN, XGPIOB_5);
 
-	suck_loop(50);
-	user_led_toggle();
+	// WIFI/BT
+	PINMUX_CONFIG(CLK32K, PWR_GPIO_10);
+	PINMUX_CONFIG(UART2_RX, UART4_RX);
+	PINMUX_CONFIG(UART2_TX, UART4_TX);
+	PINMUX_CONFIG(UART2_CTS, UART4_CTS);
+	PINMUX_CONFIG(UART2_RTS, UART4_RTS);
 
-	val = mmio_read_32(0x03020000); // signal level
-	val |= (1 << 26); // set level to high
-	val |= (1 << 25); // set level to high
-	val |= (1 << 15); // set level to high
-	val |= (1 << 27); // set level to high
-	mmio_write_32(0x03020000, val);
+	// GPIOs
+	PINMUX_CONFIG(JTAG_CPU_TCK, XGPIOA_18);
+	PINMUX_CONFIG(JTAG_CPU_TMS, XGPIOA_19);
+	PINMUX_CONFIG(JTAG_CPU_TRST, XGPIOA_20);
+	PINMUX_CONFIG(IIC0_SCL, XGPIOA_28);
 
-	// wifi sdio pinmux
-	mmio_write_32(0x030010D0, 0x0); // D3
-	mmio_write_32(0x030010D4, 0x0); // D2
-	mmio_write_32(0x030010D8, 0x0); // D1
-	mmio_write_32(0x030010DC, 0x0); // D0
-	mmio_write_32(0x030010E0, 0x0); // CMD
-	mmio_write_32(0x030010E4, 0x0); // CLK
+	// EPHY LEDs
+	PINMUX_CONFIG(PWR_WAKEUP0, EPHY_LNK_LED);
+	PINMUX_CONFIG(PWR_BUTTON1, EPHY_SPD_LED);
 
-	// spi2 pinmux
-	// mmio_write_32(0x030010D0, 0x1); // CS
-	// mmio_write_32(0x030010DC, 0x1); // MISO
-	// mmio_write_32(0x030010E0, 0x1); // MOSI
-	// mmio_write_32(0x030010E4, 0x1); // SCK
-	// mmio_write_32(0x030010D8, 0x3); // DC
-	// mmio_write_32(0x03001038, 0x3); // RESET
+	set_rtc_register_for_power();
 
-	// uart bluetooth
-	mmio_write_32(0x03001070, 0x1); // GPIOA 28 UART1 TX
-	mmio_write_32(0x03001074, 0x1); // GPIOA 29 UART1 RX
-	mmio_write_32(0x03001068, 0x4); // GPIOA 18 UART1 CTS
-	mmio_write_32(0x03001064, 0x4); // GPIOA 19 UART1 RTS
-
-	// PWM
-	//mmio_write_32(0x03001068, 0x2); // GPIOA 18 PWM 6
-
-
-	user_led_toggle();
-	// lcd backlight
-	mmio_write_32(0x030010EC, 0x0); // XGPIOB 0 PWM0_BUCK
-									// for licheervnano alpha
-	mmio_write_32(0x030010f8, 0x3); // XGPIOB 3 CAM_RESET
-	val = mmio_read_32(0x03021000); // signal level
-	val |= (1 << 0); // set level to high
-	val |= (1 << 3); // set level to high
-	mmio_write_32(0x03021000, val);
-	val = mmio_read_32(0x03021004); // GPIOB DIR
-	val |= (1 << 0); // output
-	val |= (1 << 3); // output
-	mmio_write_32(0x03021004, val);
-
-	// for licheervnano beta
-	//mmio_write_32(0x030010ac, 0x4); // PWRGPIO 2 PWM 10
-	mmio_write_32(0x030010ac, 0x0); // PWRGPIO 2 GPIO_MODE
-
-	// camera function
-//	mmio_write_32(0x0300116C, 0x5); // RX4N CAM_MCLK0 for alpha
-//	mmio_write_32(0x03001170, 0x5); // RX4P CAM_MCLK1 for alpha
-									//mmio_write_32(0x0300118C, 0x5); // RX0N CAM_MCLK1 for beta
-
-									// spi1 on mipi csi
-	/*
-	   mmio_write_32(0x0300116C, 0x7); // spi1 clk   GPIOC2 MIPI_RX4N
-	   mmio_write_32(0x03001170, 0x7); // spi1 cs    GPIOC3 MIPI_RX4P
-	   mmio_write_32(0x03001174, 0x7); // spi1 miso  GPIOC4 MIPI_RX3N
-	   mmio_write_32(0x03001178, 0x7); // spi1 mosi  GPIOC5 MIPI_RX3P
-	   */
-
-
-	//camclk
-	mmio_write_32(0x03001174, 0x4); // CAM_MCLK0 GPIOC4 MIPI_RX3N
-
-	// camera/tp i2c
-	mmio_write_32(0x03001090, 0x5); // PWR_GPIO6 IIC4_SCL
-	mmio_write_32(0x03001098, 0x5); // PWR_GPIO8 IIC4_SDA
-
-	mmio_write_32(0x03001124, 0x2); // 62 IIC1_SCL */
-	mmio_write_32(0x03001128, 0x2); // 63 IIC1_SDA */
-
-
-        /* mmio_write_32(0x030011a4, 0x2);//83
-        mmio_write_32(0x030011a8, 0x2);//84
-        mmio_write_32(0x030011ac, 0x2);//85
-        mmio_write_32(0x030011b0, 0x2);//86
-        mmio_write_32(0x030011b4, 0x2);//87
-        mmio_write_32(0x030011b8, 0x2);//88 */
-
-
-        // wait hardware bootup
-        suck_loop(50);
-	user_led_off();
-
-#endif
-        return 0;
+	return 0;
 }

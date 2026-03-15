@@ -11,6 +11,7 @@ class Yolov6 final : public DetectionBase {
   ~Yolov6();
 
   int inference(VIDEO_FRAME_INFO_S *srcFrame, cvtdl_object_t *obj_meta) override;
+  bool allowExportChannelAttribute() const override { return true; }
 
  private:
   int onModelOpened() override;

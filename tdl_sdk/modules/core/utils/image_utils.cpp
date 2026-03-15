@@ -191,7 +191,7 @@ CVI_S32 crop_image(VIDEO_FRAME_INFO_S *srcFrame, cvtdl_image_t *dst_image, cvtdl
                              tmp_image.stride[0]);
         cv::Mat cvImage_RGB888(dst_image->height, dst_image->width, CV_8UC3, dst_image->pix[0],
                                dst_image->stride[0]);
-        cv::cvtColor(cvImage_NV21, cvImage_RGB888, CV_YUV2RGB_NV21);
+        cv::cvtColor(cvImage_NV21, cvImage_RGB888, cv::COLOR_YUV2RGB_NV21);
       }
     } break;
     case PIXEL_FORMAT_YUV_PLANAR_420: {
@@ -210,7 +210,7 @@ CVI_S32 crop_image(VIDEO_FRAME_INFO_S *srcFrame, cvtdl_image_t *dst_image, cvtdl
                                tmp_image.stride[0]);
         cv::Mat cvImage_RGB888(dst_image->height, dst_image->width, CV_8UC3, dst_image->pix[0],
                                dst_image->stride[0]);
-        cv::cvtColor(cvImage_YUV420, cvImage_RGB888, CV_YUV2RGB_I420);
+        cv::cvtColor(cvImage_YUV420, cvImage_RGB888, cv::COLOR_YUV2RGB_I420);
       }
     }
     default:
@@ -313,7 +313,7 @@ CVI_S32 crop_image_exten(VIDEO_FRAME_INFO_S *srcFrame, cvtdl_image_t *dst_image,
                              tmp_image.stride[0]);
         cv::Mat cvImage_RGB888(dst_image->height, dst_image->width, CV_8UC3, dst_image->pix[0],
                                dst_image->stride[0]);
-        cv::cvtColor(cvImage_NV21, cvImage_RGB888, CV_YUV2RGB_NV21);
+        cv::cvtColor(cvImage_NV21, cvImage_RGB888, cv::COLOR_YUV2RGB_NV21);
       }
     } break;
     case PIXEL_FORMAT_YUV_PLANAR_420: {
@@ -336,7 +336,7 @@ CVI_S32 crop_image_exten(VIDEO_FRAME_INFO_S *srcFrame, cvtdl_image_t *dst_image,
         cv::Mat cvImage_RGB888(dst_image->height, dst_image->width, CV_8UC3, dst_image->pix[0],
                                dst_image->stride[0]);
 
-        cv::cvtColor(cvImage_YUV420, cvImage_RGB888, CV_YUV2RGB_I420);
+        cv::cvtColor(cvImage_YUV420, cvImage_RGB888, cv::COLOR_YUV2RGB_I420);
       }
     } break;
     default:

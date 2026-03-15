@@ -6,7 +6,11 @@ namespace cvitdl {
 
 VpssEngine::VpssEngine(VPSS_GRP desired_grp_id, CVI_U8 device)
     : m_desired_grp_id(desired_grp_id), m_dev(device) {
-  init();
+  // Do NOT call init() here. VpssEngine is lazily initialized:
+  // - initVPSSIfNeeded() calls init() on first inference when vpss is needed.
+  // - When SetSkipVpssPreprocess(true) is used, init() is never called,
+  //   so no VPSS group is ever created. This allows the caller to reuse
+  //   externally managed VPSS groups without SDK interference.
 }
 
 VpssEngine::~VpssEngine() { stop(); }
