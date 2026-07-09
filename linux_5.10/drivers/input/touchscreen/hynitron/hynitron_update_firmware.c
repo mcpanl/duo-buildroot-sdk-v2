@@ -3410,18 +3410,24 @@ int cst8xx_firmware_info(struct i2c_client *mclient)
 		return -1;
 	}
 	
-	fwversion   = *(hyn_ts_data->p_hynitron_upgrade_firmware+0x3BFD+6);
-	fwversion <<= 8;
-	fwversion  += *(hyn_ts_data->p_hynitron_upgrade_firmware+0x3BFC+6);
-	HYN_INFO("\r\nhyn fwversion: %x\r\n",fwversion);
-	
 	chipversion   = buf[1];
 	chipversion <<= 8;
 	chipversion  += buf[0];
 	hyn_ts_data->chip_ic_fw_version=chipversion;
 
-	
 	HYN_INFO("\r\nhyn chipversion: %x\r\n",chipversion);
+
+	if (!hyn_ts_data->p_hynitron_upgrade_firmware ||
+		hyn_ts_data->fw_length <= (0x3BFD + 6)) {
+		HYN_INFO("hyn no cst8xx upgrade firmware, skip fwversion compare.\r\n");
+		HYN_FUNC_EXIT();
+		return ret;
+	}
+	
+	fwversion   = *(hyn_ts_data->p_hynitron_upgrade_firmware+0x3BFD+6);
+	fwversion <<= 8;
+	fwversion  += *(hyn_ts_data->p_hynitron_upgrade_firmware+0x3BFC+6);
+	HYN_INFO("\r\nhyn fwversion: %x\r\n",fwversion);
 	
 	if(chipversion>fwversion)
 	{

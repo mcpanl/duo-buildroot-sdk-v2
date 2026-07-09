@@ -78,9 +78,9 @@
 
 //please config the chip series before using.
 
-#define HYN_CHIP_TYPE_CONFIG						CST3240
-#define HYN_IRQ_TRIGGER_RISING_CONFIG	    	    0x01 
-#define HYN_MAIN_IIC_ADDR_CONFIG		    	    0x5A 
+#define HYN_CHIP_TYPE_CONFIG						CST816
+#define HYN_IRQ_TRIGGER_RISING_CONFIG	    	    0x00
+#define HYN_MAIN_IIC_ADDR_CONFIG		    	    0x15 
 
 #define HYN_X_DISPLAY_DEFAULT              	 	    600
 #define HYN_Y_DISPLAY_DEFAULT               	    1024

@@ -1,7 +1,7 @@
 
 # Linux driver folder
 
-obj-m += hynitron_touch.o
+obj-y += hynitron_touch.o
 
 hynitron_touch-objs	+= hynitron_core.o
 hynitron_touch-objs	+= hynitron_i2c.o
