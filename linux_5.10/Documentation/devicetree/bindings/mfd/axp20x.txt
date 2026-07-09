@@ -10,6 +10,7 @@ axp803 (X-Powers)
 axp806 (X-Powers)
 axp809 (X-Powers)
 axp813 (X-Powers)
+axp2101 (X-Powers)
 
 The AXP813 is 2 chips packaged into 1. The 2 chips do not share anything
 other than the packaging. Pins are routed separately. As such they should
@@ -28,6 +29,7 @@ Required properties:
     * "x-powers,axp805", "x-powers,axp806"
     * "x-powers,axp809"
     * "x-powers,axp813"
+    * "x-powers,axp2101"
 - reg: The I2C slave address or RSB hardware address for the AXP chip
 - interrupts: SoC NMI / GPIO interrupt connected to the PMIC's IRQ pin
 - interrupt-controller: The PMIC has its own internal IRQs
