@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# Early OTA hook: mount /mnt/ota and apply pending upgrade before apps start.
+#
+
+. /usr/sbin/zonhor-ota-common.sh
+
+case "$1" in
+start)
+	ota_warn_no_partition
+
+	if ! ota_mount; then
+		echo "S05ota: OTA mount failed, skipping"
+		exit 0
+	fi
+
+	if [ -f "$OTA_MNT/rootfs.pending" ]; then
+		echo "S05ota: resuming ROOTFS recovery boot"
+		ota_led_start recovery
+		ota_boot_recovery
+		exit $?
+	fi
+
+	if [ -f "$OTA_MNT/upgrade.pending" ] && [ -f "$OTA_MNT/upgrade.zip" ]; then
+		if ! ota_part_exists; then
+			echo "S05ota: refuse ROOTFS OTA without $OTA_DEV"
+			echo "S05ota: run zonhor-ota-migrate-fip first"
+			exit 1
+		fi
+		echo "S05ota: pending upgrade detected, applying phase-1..."
+		/usr/sbin/zonhor-ota-apply
+		exit $?
+	fi
+	;;
+stop)
+	if ota_is_mounted && ota_part_exists; then
+		umount "$OTA_MNT" 2>/dev/null
+	fi
+	;;
+restart|reload)
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
+
+exit 0

@@ -1,0 +1,65 @@
+#!/bin/sh
+#
+# One-time migration: flash fip.bin from upgrade.zip to eMMC boot partitions.
+# Required because USB download often skips fip.bin; without new U-Boot the
+# OTA partition (mmcblk0p5) does not exist in blkdevparts.
+#
+
+. /usr/sbin/zonhor-ota-common.sh
+
+WORK=/tmp/fip-migrate
+ZIP=""
+
+usage() {
+	echo "Usage: $0 [upgrade.zip]"
+	echo "  Flashes fip.bin to mmcblk0boot0/boot1, then reboot."
+	exit 1
+}
+
+log() {
+	echo "$*"
+}
+
+fail() {
+	log "ERROR: $*"
+	ota_led_error
+	rm -rf "$WORK"
+	exit 1
+}
+
+ota_mount || fail "cannot prepare $OTA_MNT"
+
+if [ -n "$1" ]; then
+	[ -f "$1" ] || fail "file not found: $1"
+	ZIP="$1"
+else
+	ZIP=$(ota_find_upgrade_zip) || fail "upgrade.zip not found under $OTA_MNT"
+fi
+
+rm -rf "$WORK"
+mkdir -p "$WORK"
+
+log "extracting fip.bin from $ZIP"
+ota_led_start fip
+unzip -q -j "$ZIP" fip.bin -d "$WORK" || fail "fip.bin missing in package"
+[ -s "$WORK/fip.bin" ] || fail "fip.bin is empty"
+
+for bootdev in /sys/block/mmcblk0boot0/force_ro /sys/block/mmcblk0boot1/force_ro; do
+	if [ -f "$bootdev" ]; then
+		echo 0 >"$bootdev" || fail "cannot disable read-only on $bootdev"
+	fi
+done
+
+log "writing fip.bin to /dev/mmcblk0boot0 and mmcblk0boot1"
+dd if="$WORK/fip.bin" of=/dev/mmcblk0boot0 bs=512 conv=fsync || fail "dd to mmcblk0boot0 failed"
+dd if="$WORK/fip.bin" of=/dev/mmcblk0boot1 bs=512 conv=fsync || fail "dd to mmcblk0boot1 failed"
+
+sync
+rm -rf "$WORK"
+
+log "fip migration complete"
+ota_led_stop
+log "reboot now; after reboot check: lsblk (expect mmcblk0p5)"
+log "then run: zonhor-ota-stage && sync && reboot"
+sleep 2
+reboot -f

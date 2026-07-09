@@ -1,0 +1,211 @@
+/dts-v1/;
+#include "cv181x_base_arm.dtsi"
+#include "cv181x_asic_bga.dtsi"
+#include "cv181x_asic_emmc.dtsi"
+#include "cv181x_default_memmap.dtsi"
+
+/ {
+	model = "Zonhor SG2000";
+
+	leds {
+		compatible = "gpio-leds";
+
+		sys-led {
+			label = "sys-led";
+			gpios = <&porta 29 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "activity";
+		};
+
+		user-led {
+			label = "user-led";
+			gpios = <&porta 18 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		user-button {
+			label = "user-button";
+			linux,code = <28>; /* KEY_ENTER */
+			gpios = <&portb 4 GPIO_ACTIVE_LOW>;
+			debounce-interval = <10>;
+			wakeup-source;
+		};
+	};
+};
+
+&mipi_rx {
+	snsr-reset = <&porta 2 GPIO_ACTIVE_LOW>, <&porta 2 GPIO_ACTIVE_LOW>, <&porta 2 GPIO_ACTIVE_LOW>;
+};
+
+&i2c0 {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "okay";
+
+	/* Reserved addresses for board peripherals */
+	axp2101: pmic@34 {
+		compatible = "x-powers,axp2101";
+		reg = <0x34>;
+		interrupt-parent = <&porta>;
+		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
+		wakeup-source;
+		status = "okay";
+
+		battery-power-supply {
+			compatible = "x-powers,axp2101-battery-power-supply";
+		};
+	};
+
+	icm42688: imu@18 {
+		compatible = "hxymos,icm42688p";
+		reg = <0x18>;
+		interrupt-parent = <&portb>;
+		interrupts = <22 IRQ_TYPE_EDGE_RISING>;
+		status = "okay";
+	};
+
+	touch@15 {
+		compatible = "hynitron,hyn_ts";
+		reg = <0x15>;
+		interrupt-parent = <&porta>;
+		interrupts = <28 IRQ_TYPE_EDGE_FALLING>;
+		hynitron,irq-gpio = <&porta 28 0>;
+		hynitron,reset-gpio = <&portb 21 0>;
+		hynitron,max-touch-number = <1>;
+		hynitron,display-coords = <172 320>;
+		pos-swap = <0>;
+		posx-reverse = <0>;
+		posy-reverse = <0>;
+		status = "okay";
+	};
+
+	wusb3801q: typec@60 {
+		compatible = "willsemi,wusb3801q";
+		reg = <0x60>;
+		interrupt-parent = <&porta>;
+		interrupts = <19 IRQ_TYPE_EDGE_FALLING>;
+		id-gpios = <&porta 30 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
+};
+
+&i2c2 {
+	status = "okay";
+};
+
+&i2c3 {
+	status = "okay";
+};
+
+&i2c4 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "okay";
+	num-cs = <1>;
+
+	/delete-node/ spidev@0;
+
+	jd9853: display@0 {
+		compatible = "jadard,jd9853";
+		reg = <0>;
+		spi-max-frequency = <40000000>;
+		buswidth = <8>;
+		width = <172>;
+		height = <320>;
+		rotate = <0>;
+		fps = <30>;
+		backlight = <1>;
+		dc = <&portb 20 0>;
+		reset = <&portb 12 GPIO_ACTIVE_LOW>;
+		led = <&porta 20 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
+};
+
+&pwm0 {
+	status = "okay";
+};
+
+/* Enable internal ADC path; codec supports both MICL/MICR channels. */
+&adc {
+	status = "okay";
+};
+
+&{/sound_adc} {
+	status = "okay";
+};
+
+&dac {
+	/delete-property/ mute-gpio-l;
+	/delete-property/ mute-gpio-r;
+};
+
+/* mipi dsi for u-boot */
+&vo {
+	compatible = "cvitek,vo";
+	reset-gpio = <&porte 2 GPIO_ACTIVE_LOW>;
+	pwm-gpio = <&porte 0 GPIO_ACTIVE_HIGH>;
+	power-ct-gpio = <&porte 1 GPIO_ACTIVE_HIGH>;
+	status = "okay";
+};
+
+/* mipi dsi for kernel */
+&mipi_tx {
+	compatible = "cvitek,mipi_tx";
+	reset-gpio = <&porte 2 GPIO_ACTIVE_LOW>;
+	pwm-gpio = <&porte 0 GPIO_ACTIVE_HIGH>;
+	power-ct-gpio = <&porte 1 GPIO_ACTIVE_HIGH>;
+	status = "okay";
+};
+
+&sd {
+	/delete-property/ cvi-cd-gpios;
+	non-removable;
+	disable-wp;
+	no-1-8-v;
+	max-frequency = <50000000>;
+};
+
+&wifisd {
+	status = "okay";
+	cap-sd-highspeed;
+	sd-uhs-sdr25;
+	sd-uhs-ddr50;
+	sd-uhs-sdr104;
+	min-frequency = <400000>;
+	max-frequency = <187500000>;
+};
+
+&wifi_pin {
+	status = "okay";
+	compatible = "cvitek,wifi-pin";
+	poweron-gpio = <&porta 15 GPIO_ACTIVE_HIGH>;
+	wakeup-gpio = <&porte 7 GPIO_ACTIVE_HIGH>;
+};
+
+&usb {
+	vbus-gpio = <&portb 6 0>;
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&uart2 {
+	status = "okay";
+};
+
+&uart3 {
+	status = "okay";
+};
+
+&uart4 {
+	status = "okay";
+};

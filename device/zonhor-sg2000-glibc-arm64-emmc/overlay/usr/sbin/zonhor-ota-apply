@@ -1,0 +1,84 @@
+#!/bin/sh
+#
+# Phase-1 OTA apply (runs from ROOTFS on mmcblk0p4):
+#   - verify package
+#   - flash BOOT/MISC only
+#   - prepare OTA recovery root on mmcblk0p5
+#   - reboot into recovery to flash ROOTFS
+#
+
+. /usr/sbin/zonhor-ota-common.sh
+
+OTA_FILE="$OTA_MNT/upgrade.zip"
+OTA_PENDING="$OTA_MNT/upgrade.pending"
+OTA_WORK="$OTA_MNT/work"
+OTA_LOG="$OTA_MNT/upgrade.log"
+OTA_FAIL="$OTA_MNT/upgrade.failed"
+RECOVERY_INIT=/usr/sbin/zonhor-ota-recovery-init.sh
+
+log() {
+	echo "$(date '+%F %T') $*" | tee -a "$OTA_LOG"
+}
+
+fail() {
+	log "ERROR: $*"
+	ota_led_error
+	touch "$OTA_FAIL" 2>/dev/null
+	rm -f "$OTA_PENDING"
+	sync 2>/dev/null
+	exit "${2:-1}"
+}
+
+trap 'log "interrupted"; ota_led_stop; exit 130' INT TERM
+
+ota_mount || fail "cannot mount $OTA_MNT"
+
+[ -f "$OTA_FILE" ] || fail "missing $OTA_FILE"
+[ -f "$OTA_PENDING" ] || fail "missing $OTA_PENDING (run zonhor-ota-stage first)"
+
+if ! ota_part_exists; then
+	fail "OTA partition $OTA_DEV required for safe ROOTFS update; run zonhor-ota-migrate-fip"
+fi
+
+rm -f "$OTA_FAIL"
+: >"$OTA_LOG"
+
+log "phase-1 OTA apply starting"
+log "ROOTFS will be flashed in recovery mode (boot from mmcblk0p5)"
+ota_led_start phase1
+
+rm -rf "$OTA_WORK"
+mkdir -p "$OTA_WORK"
+
+log "checking package metadata"
+unzip -q -d "$OTA_WORK" "$OTA_FILE" META/misc_info.txt || fail "META/misc_info.txt missing"
+# shellcheck disable=SC1090
+. "$OTA_WORK/META/misc_info.txt"
+[ "$STORAGE_TYPE" = "emmc" ] || fail "package STORAGE_TYPE=$STORAGE_TYPE, expected emmc"
+
+log "unpacking $OTA_FILE"
+unzip -o "$OTA_FILE" -d "$OTA_WORK" || fail "unzip failed"
+
+METADATA="$OTA_WORK/META/metadata.txt"
+[ -f "$METADATA" ] || fail "missing $METADATA"
+chmod +x "$OTA_WORK/utils/cimg2raw" 2>/dev/null
+
+log "verifying image checksums"
+cd "$OTA_WORK" || fail "cannot enter $OTA_WORK"
+md5sum -c META/metadata.txt >>"$OTA_LOG" 2>&1 || fail "checksum verification failed"
+
+log "preparing rootfs image for recovery"
+ota_prepare_rootfs_image "$OTA_WORK" || fail "cannot prepare rootfs image"
+
+log "flashing BOOT and MISC only"
+ota_flash_boot_misc "$OTA_WORK" >>"$OTA_LOG" 2>&1 || fail "boot/misc flash failed"
+
+log "installing recovery environment on $OTA_DEV"
+ota_prepare_recovery_root "$RECOVERY_INIT" || fail "cannot prepare recovery root"
+
+rm -f "$OTA_PENDING"
+sync
+
+log "phase-1 complete, rebooting into recovery for ROOTFS flash"
+ota_led_stop
+ota_boot_recovery || fail "cannot set recovery boot environment"

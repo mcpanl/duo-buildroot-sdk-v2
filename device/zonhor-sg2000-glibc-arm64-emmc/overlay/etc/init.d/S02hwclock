@@ -1,0 +1,45 @@
+#!/bin/sh
+#
+# Load SG2000 on-chip RTC and sync system time from hardware clock.
+#
+
+RTC_KO=/mnt/system/ko/cv181x_rtc.ko
+RTC_DEV=/dev/rtc0
+
+load_rtc() {
+	[ -e "$RTC_DEV" ] && return 0
+	[ -f "$RTC_KO" ] || return 1
+	if ! lsmod | grep -q '^cv181x_rtc '; then
+		insmod "$RTC_KO" || return 1
+	fi
+	[ -e "$RTC_DEV" ]
+}
+
+case "$1" in
+start)
+	if load_rtc; then
+		if hwclock -s 2>/dev/null; then
+			echo "S02hwclock: synced system time from $RTC_DEV"
+		else
+			echo "S02hwclock: $RTC_DEV ready, hwclock sync skipped"
+		fi
+	else
+		echo "S02hwclock: RTC driver not available"
+	fi
+	;;
+stop)
+	if [ -e "$RTC_DEV" ]; then
+		hwclock -w 2>/dev/null
+	fi
+	;;
+restart|reload)
+	$0 stop
+	$0 start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|reload}"
+	exit 1
+	;;
+esac
+
+exit 0

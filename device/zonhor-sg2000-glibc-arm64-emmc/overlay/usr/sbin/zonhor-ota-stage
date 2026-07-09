@@ -1,0 +1,53 @@
+#!/bin/sh
+#
+# Stage an OTA package on /mnt/ota for application on next reboot.
+#
+# Usage:
+#   zonhor-ota-stage /path/to/upgrade.zip
+#   zonhor-ota-stage              # use existing /mnt/ota/upgrade.zip
+#
+
+. /usr/sbin/zonhor-ota-common.sh
+
+OTA_FILE="$OTA_MNT/upgrade.zip"
+OTA_PENDING="$OTA_MNT/upgrade.pending"
+
+usage() {
+	echo "Usage: $0 [upgrade.zip]"
+	echo "  Copies package to $OTA_FILE and creates $OTA_PENDING."
+	echo "  Reboot to apply: sync && reboot"
+	exit 1
+}
+
+ota_mount || {
+	echo "cannot prepare $OTA_MNT"
+	exit 1
+}
+
+ota_warn_no_partition
+
+SRC="$1"
+if [ -n "$SRC" ]; then
+	[ -f "$SRC" ] || {
+		echo "file not found: $SRC"
+		exit 1
+	}
+	echo "copying $SRC -> $OTA_FILE"
+	cp -f "$SRC" "$OTA_FILE" || exit 1
+elif [ ! -f "$OTA_FILE" ]; then
+	usage
+fi
+
+rm -f "$OTA_MNT/upgrade.failed"
+touch "$OTA_PENDING"
+sync
+
+ota_led_start staged
+
+echo "OTA package staged."
+echo "  package : $OTA_FILE"
+echo "  marker  : $OTA_PENDING"
+if ! ota_part_exists; then
+	echo "  note    : OTA partition missing; run zonhor-ota-migrate-fip before ROOTFS update"
+fi
+echo "Run: sync && reboot"
