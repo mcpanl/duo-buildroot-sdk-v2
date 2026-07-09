@@ -468,6 +468,16 @@ config INPUT_AXP20X_PEK
 	  To compile this driver as a module, choose M here. The module will
 	  be called axp20x-pek.
 
+config INPUT_AXP2101_PEK
+	tristate "X-Powers AXP2101 power button driver"
+	depends on MFD_AXP20X
+	help
+	  Say Y here if you want to enable power key reporting via the
+	  AXP2101 PMIC.
+
+	  To compile this driver as a module, choose M here. The module will
+	  be called axp2101-pek.
+
 
 config INPUT_TWL4030_PWRBUTTON
 	tristate "TWL4030 Power button Driver"

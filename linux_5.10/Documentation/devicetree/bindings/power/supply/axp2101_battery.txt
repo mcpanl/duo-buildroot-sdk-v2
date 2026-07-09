@@ -1,0 +1,23 @@
+* Binding for X-Powers AXP2101 battery power supply
+
+Required properties:
+- compatible: "x-powers,axp2101-battery-power-supply"
+
+This child node is instantiated by the AXP2101 MFD driver and exposes
+battery/charger information through the Linux power supply class.
+
+Example:
+
+&i2c1 {
+	axp2101: pmic@34 {
+		compatible = "x-powers,axp2101";
+		reg = <0x34>;
+		interrupt-parent = <&porta>;
+		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
+		wakeup-source;
+
+		battery-power-supply {
+			compatible = "x-powers,axp2101-battery-power-supply";
+		};
+	};
+};
