@@ -1,0 +1,5 @@
+config BR2_PACKAGE_AXP2101CTL
+	bool "axp2101ctl"
+	help
+	  User space helper for AXP2101 battery status, charge current
+	  configuration and PMIC power key events.
