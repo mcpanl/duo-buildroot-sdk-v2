@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+config ICM42688P_I2C
+	tristate "HuaXuanYang ICM-42688P I2C driver"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Driver for the HuaXuanYang ICM-42688P 6-axis IMU over I2C.
+	  Register map follows ICM_42688P-HXY.pdf (not InvenSense ICM-426xx).
+
+	  To compile as a module, choose M here. The module is icm42688p.

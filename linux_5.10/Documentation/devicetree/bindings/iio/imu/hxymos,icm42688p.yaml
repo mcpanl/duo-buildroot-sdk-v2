@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/iio/imu/hxymos,icm42688p.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HuaXuanYang ICM-42688P 6-axis IMU
+
+maintainers:
+  - Zonhor <support@zonhor.com>
+
+description: |
+  The HuaXuanYang ICM-42688P is a 6-axis IMU with 3-axis accelerometer and
+  3-axis gyroscope. It uses a flat 8-bit register map documented in
+  ICM_42688P-HXY.pdf and is not register-compatible with InvenSense ICM-426xx.
+
+properties:
+  compatible:
+    const: hxymos,icm42688p
+
+  reg:
+    description: I2C slave address (0x18 when SDO/SA0 is low, 0x19 when high)
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+
+examples:
+  - |
+    i2c {
+      #address-cells = <1>;
+      #size-cells = <0>;
+
+      imu@18 {
+        compatible = "hxymos,icm42688p";
+        reg = <0x18>;
+        interrupt-parent = <&gpio>;
+        interrupts = <22 IRQ_TYPE_EDGE_RISING>;
+      };
+    };

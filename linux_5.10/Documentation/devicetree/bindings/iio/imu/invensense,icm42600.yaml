@@ -30,6 +30,7 @@ properties:
       - invensense,icm42600
       - invensense,icm42602
       - invensense,icm42605
+      - invensense,icm42688
       - invensense,icm42622
 
   reg:
