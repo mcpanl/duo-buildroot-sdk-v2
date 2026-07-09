@@ -135,6 +135,7 @@ function build_usage()
   echo "Usage:"
   echo "${BASH_SOURCE[0]}              - Show this menu"
   echo "${BASH_SOURCE[0]} lunch        - Select a board to build"
+  echo "${BASH_SOURCE[0]} zonhor       - Build zonhor-sg2000-glibc-arm64-emmc"
   echo "${BASH_SOURCE[0]} [board]      - Build [board] directly, supported boards as follows:"
   list_boards
 }
@@ -143,6 +144,9 @@ if [ $# -ge 1 ]; then
   if [ "$1" = "lunch" ]; then
     source ${TOP_DIR}/build/envsetup_milkv.sh lunch || exit 1
   else
+    if [ "$1" = "zonhor" ] || [ "$1" = "zonhor-sg2000" ]; then
+      set -- "zonhor-sg2000-glibc-arm64-emmc"
+    fi
     source ${TOP_DIR}/build/envsetup_milkv.sh "list" || exit 1
     if [[ ${MILKV_BOARD_ARRAY[@]} =~ (^|[[:space:]])"${1}"($|[[:space:]]) ]]; then
       #MILKV_BOARD=${1}

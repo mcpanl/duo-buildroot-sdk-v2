@@ -918,6 +918,8 @@ function cvi_setup_env()
     MV_BOARD_TYPE="duo256m"
   elif [[ ${MV_BOARD} == *"-duos-"* ]]; then
     MV_BOARD_TYPE="duos"
+  elif [[ ${MV_BOARD} == "zonhor-sg2000-glibc-arm64-emmc" ]]; then
+    MV_BOARD_TYPE="duos"
   else
     print_error "Unknown MV_BOARD_TYPE!"
     return 1
