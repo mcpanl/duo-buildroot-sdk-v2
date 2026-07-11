@@ -1,0 +1,197 @@
+#!/bin/sh
+#
+# Zonhor eMMC A/B slot API.
+#
+
+SLOT_A_BOOT=/dev/mmcblk0p1
+SLOT_B_BOOT=/dev/mmcblk0p2
+SLOT_MISC=/dev/mmcblk0p3
+SLOT_A_ROOT=/dev/mmcblk0p5
+SLOT_B_ROOT=/dev/mmcblk0p6
+
+ab_slot_norm() {
+	case "$1" in
+	a|A|0) echo a ;;
+	b|B|1) echo b ;;
+	*) return 1 ;;
+	esac
+}
+
+ab_env_get() {
+	fw_printenv -n "$1" 2>/dev/null
+}
+
+ab_get_active() {
+	slot=$(ab_env_get boot_slot)
+	ab_slot_norm "${slot:-a}"
+}
+
+ab_get_inactive() {
+	case "$(ab_get_active)" in
+	a) echo b ;;
+	b) echo a ;;
+	esac
+}
+
+ab_slot_boot_dev() {
+	case "$(ab_slot_norm "$1")" in
+	a) echo "$SLOT_A_BOOT" ;;
+	b) echo "$SLOT_B_BOOT" ;;
+	esac
+}
+
+ab_slot_root_dev() {
+	case "$(ab_slot_norm "$1")" in
+	a) echo "$SLOT_A_ROOT" ;;
+	b) echo "$SLOT_B_ROOT" ;;
+	esac
+}
+
+ab_init_env_defaults() {
+	[ -n "$(ab_env_get boot_slot)" ] || fw_setenv boot_slot a
+	[ -n "$(ab_env_get slot_a_priority)" ] || fw_setenv slot_a_priority 15
+	[ -n "$(ab_env_get slot_b_priority)" ] || fw_setenv slot_b_priority 14
+	[ -n "$(ab_env_get slot_a_tries)" ] || fw_setenv slot_a_tries 7
+	[ -n "$(ab_env_get slot_b_tries)" ] || fw_setenv slot_b_tries 7
+	[ -n "$(ab_env_get slot_a_successful)" ] || fw_setenv slot_a_successful 1
+	[ -n "$(ab_env_get slot_b_successful)" ] || fw_setenv slot_b_successful 1
+}
+
+ab_set_boot_slot() {
+	slot=$(ab_slot_norm "$1") || return 1
+
+	ab_init_env_defaults
+	fw_setenv boot_slot "$slot" || return 1
+
+	if [ "$slot" = "a" ]; then
+		fw_setenv slot_a_priority 15
+		fw_setenv slot_b_priority 14
+	else
+		fw_setenv slot_a_priority 14
+		fw_setenv slot_b_priority 15
+	fi
+
+	fw_setenv slot_a_tries 7
+	fw_setenv slot_b_tries 7
+	fw_setenv slot_a_successful 1
+	fw_setenv slot_b_successful 1
+}
+
+ab_mark_successful() {
+	# Phase 1: reserved for automatic rollback in a later release.
+	:
+}
+
+ab_flash_partition() {
+	dev="$1"
+	img="$2"
+
+	[ -b "$dev" ] || return 1
+	[ -f "$img" ] || return 1
+	dd if="$img" of="$dev" bs=4M conv=fsync status=none
+}
+
+ab_flash_boot() {
+	slot=$(ab_slot_norm "${1:-$(ab_get_inactive)}") || return 1
+	ab_flash_partition "$(ab_slot_boot_dev "$slot")" "$2"
+}
+
+ab_flash_rootfs() {
+	slot=$(ab_slot_norm "${1:-$(ab_get_inactive)}") || return 1
+	ab_flash_partition "$(ab_slot_root_dev "$slot")" "$2"
+}
+
+ab_flash_misc() {
+	ab_flash_partition "$SLOT_MISC" "$1"
+}
+
+ab_show() {
+	active=$(ab_get_active)
+	inactive=$(ab_get_inactive)
+	echo "active_slot=$active"
+	echo "inactive_slot=$inactive"
+	echo "boot_slot=$(ab_env_get boot_slot)"
+	echo "slot_a_priority=$(ab_env_get slot_a_priority)"
+	echo "slot_b_priority=$(ab_env_get slot_b_priority)"
+	echo "slot_a_tries=$(ab_env_get slot_a_tries)"
+	echo "slot_b_tries=$(ab_env_get slot_b_tries)"
+	echo "slot_a_successful=$(ab_env_get slot_a_successful)"
+	echo "slot_b_successful=$(ab_env_get slot_b_successful)"
+	echo "slot_a_boot=$SLOT_A_BOOT"
+	echo "slot_b_boot=$SLOT_B_BOOT"
+	echo "slot_a_root=$SLOT_A_ROOT"
+	echo "slot_b_root=$SLOT_B_ROOT"
+}
+
+usage() {
+	echo "Usage: $0 <command> [args]"
+	echo "Commands:"
+	echo "  get-active"
+	echo "  get-inactive"
+	echo "  show"
+	echo "  set-boot-slot <a|b>"
+	echo "  mark-successful"
+	echo "  flash-boot [slot] <image>"
+	echo "  flash-rootfs [slot] <image>"
+	echo "  flash-misc <image>"
+	exit 1
+}
+
+ab_ensure_lock_dir() {
+	if ! mountpoint -q /run 2>/dev/null; then
+		mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run 2>/dev/null || true
+	fi
+	mkdir -p /run/lock
+	chmod 1777 /run/lock 2>/dev/null || true
+}
+
+if ! command -v fw_printenv >/dev/null 2>&1; then
+	echo "ERROR: fw_printenv not installed" >&2
+	exit 1
+fi
+
+ab_ensure_lock_dir
+
+case "$1" in
+get-active)
+	ab_get_active
+	;;
+get-inactive)
+	ab_get_inactive
+	;;
+show)
+	ab_show
+	;;
+set-boot-slot)
+	[ -n "$2" ] || usage
+	ab_set_boot_slot "$2"
+	;;
+mark-successful)
+	ab_mark_successful
+	;;
+flash-boot)
+	if [ $# -eq 2 ]; then
+		ab_flash_boot "" "$2"
+	elif [ $# -eq 3 ]; then
+		ab_flash_boot "$2" "$3"
+	else
+		usage
+	fi
+	;;
+flash-rootfs)
+	if [ $# -eq 2 ]; then
+		ab_flash_rootfs "" "$2"
+	elif [ $# -eq 3 ]; then
+		ab_flash_rootfs "$2" "$3"
+	else
+		usage
+	fi
+	;;
+flash-misc)
+	[ -n "$2" ] || usage
+	ab_flash_misc "$2"
+	;;
+*)
+	usage
+	;;
+esac

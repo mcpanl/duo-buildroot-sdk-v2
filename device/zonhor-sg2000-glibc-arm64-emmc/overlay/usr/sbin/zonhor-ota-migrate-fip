@@ -1,8 +1,7 @@
 #!/bin/sh
 #
-# One-time migration: flash fip.bin from upgrade.zip to eMMC boot partitions.
-# Required because USB download often skips fip.bin; without new U-Boot the
-# OTA partition (mmcblk0p5) does not exist in blkdevparts.
+# Rescue helper: flash fip.bin from upgrade.zip to eMMC boot partitions.
+# Layout migration to A/B still requires a full USB flash with fip.bin.
 #
 
 . /usr/sbin/zonhor-ota-common.sh
@@ -13,6 +12,7 @@ ZIP=""
 usage() {
 	echo "Usage: $0 [upgrade.zip]"
 	echo "  Flashes fip.bin to mmcblk0boot0/boot1, then reboot."
+	echo "  For A/B layout migration, use USB usb_dl with the new partition_emmc.xml."
 	exit 1
 }
 
@@ -27,13 +27,13 @@ fail() {
 	exit 1
 }
 
-ota_mount || fail "cannot prepare $OTA_MNT"
+data_mount || fail "cannot prepare $DATA_MNT"
 
 if [ -n "$1" ]; then
 	[ -f "$1" ] || fail "file not found: $1"
 	ZIP="$1"
 else
-	ZIP=$(ota_find_upgrade_zip) || fail "upgrade.zip not found under $OTA_MNT"
+	ZIP=$(ota_find_upgrade_zip) || fail "upgrade.zip not found under $DATA_MNT"
 fi
 
 rm -rf "$WORK"
@@ -57,9 +57,9 @@ dd if="$WORK/fip.bin" of=/dev/mmcblk0boot1 bs=512 conv=fsync || fail "dd to mmcb
 sync
 rm -rf "$WORK"
 
-log "fip migration complete"
+log "fip flash complete"
 ota_led_stop
-log "reboot now; after reboot check: lsblk (expect mmcblk0p5)"
-log "then run: zonhor-ota-stage && sync && reboot"
+log "reboot now; for A/B layout verify: lsblk (expect BOOT/BOOT_B/ROOTFS/ROOTFS_B/DATA)"
+log "full layout migration still requires USB usb_dl with fip.bin"
 sleep 2
 reboot -f
