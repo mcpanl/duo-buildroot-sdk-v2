@@ -20,6 +20,7 @@ function _build_default_env()
   COMPRESSOR_UBOOT=${COMPRESSOR_UBOOT:-lzma} # or none to disable
   MULTI_PROCESS_SUPPORT=${MULTI_PROCESS_SUPPORT:-0}
   ENABLE_BOOTLOGO=${ENABLE_BOOTLOGO:-0}
+  ENABLE_SPI_BOOTLOGO=${ENABLE_SPI_BOOTLOGO:-0}
   TPU_REL=${TPU_REL:-1} # TPU release build
   SENSOR=${SENSOR:-sony_imx327}
 }
@@ -940,6 +941,13 @@ function cvi_setup_env()
   else
     ENABLE_BOOTLOGO=0
   fi
+  if grep -q "CONFIG_CMD_JD9853_LOGO=y" ${UBOOT_DEFCONFIG}; then
+    ENABLE_SPI_BOOTLOGO=1
+  else
+    ENABLE_SPI_BOOTLOGO=0
+  fi
+  SPI_BOOTLOGO_PNG="${TOP_DIR}/logo/boot_logo.png"
+  export ENABLE_SPI_BOOTLOGO SPI_BOOTLOGO_PNG
 }
 
 cvi_print_env()
@@ -954,6 +962,10 @@ cvi_print_env()
   echo -e "  Linux source folder:\e[34m$KERNEL_SRC\e[0m, Uboot source folder: \e[34m$UBOOT_SRC\e[0m"
   echo -e "  CROSS_COMPILE_PREFIX: \e[34m$CROSS_COMPILE\e[0m"
   echo -e "  ENABLE_BOOTLOGO: $ENABLE_BOOTLOGO"
+  echo -e "  ENABLE_SPI_BOOTLOGO: $ENABLE_SPI_BOOTLOGO"
+  if [ "$ENABLE_SPI_BOOTLOGO" = "1" ]; then
+    echo -e "  SPI boot logo PNG: $SPI_BOOTLOGO_PNG"
+  fi
   echo -e "  Flash layout xml: $FLASH_PARTITION_XML"
   echo -e "  Target Top Config: $TARGET_TOP_CONFIG"
   echo -e "  Sensor tuning bin: $SENSOR_TUNING_PARAM"

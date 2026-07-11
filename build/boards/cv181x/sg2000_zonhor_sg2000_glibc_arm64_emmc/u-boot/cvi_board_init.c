@@ -6,6 +6,39 @@ static void set_rtc_register_for_power(void)
 	mmio_write_32(0x050260D0, 0x7);
 }
 
+/*
+ * U-Boot has no Cvitek CLK driver (CONFIG_CLK is off). DesignWare SPI probe
+ * calls this weak hook for the SSI input clock. Default CV181x clk_spi is
+ * FPLL(1GHz)/8 = 125MHz; also ungates APB SPI3 + clk_spi.
+ */
+#define CV181X_CLK_BASE		0x03002000
+#define CV181X_REG_CLK_EN_1	0x004
+#define CV181X_REG_CLK_EN_3	0x00C
+#define CV181X_REG_DIV_CLK_SPI	0x100
+#define CV181X_SPI_PARENT_HZ	1000000000UL
+
+int dw_spi_get_clk(struct udevice *bus, ulong *rate)
+{
+	u32 en, div_reg, div;
+
+	en = mmio_read_32(CV181X_CLK_BASE + CV181X_REG_CLK_EN_1);
+	mmio_write_32(CV181X_CLK_BASE + CV181X_REG_CLK_EN_1, en | BIT(12));
+	en = mmio_read_32(CV181X_CLK_BASE + CV181X_REG_CLK_EN_3);
+	mmio_write_32(CV181X_CLK_BASE + CV181X_REG_CLK_EN_3, en | BIT(6));
+
+	div_reg = mmio_read_32(CV181X_CLK_BASE + CV181X_REG_DIV_CLK_SPI);
+	div = (div_reg >> 16) & 0x3f;
+	if (div < 1)
+		div = 8;
+
+	*rate = CV181X_SPI_PARENT_HZ / div;
+	printf("jd9853/clk: en1=0x%x en3=0x%x div_reg=0x%x div=%u rate=%lu Hz\n",
+	       mmio_read_32(CV181X_CLK_BASE + CV181X_REG_CLK_EN_1),
+	       mmio_read_32(CV181X_CLK_BASE + CV181X_REG_CLK_EN_3),
+	       div_reg, div, *rate);
+	return 0;
+}
+
 int cvi_board_init(void)
 {
 	/* Camera0 */
@@ -26,7 +59,14 @@ int cvi_board_init(void)
 
 	/* USER_BUTTON and PMIC IRQ */
 	PINMUX_CONFIG(USB_ID, XGPIOB_4);        /* USER_BUTTON */
+	/*
+	 * AXP2101 INT# on PAD_SD0_PWR_EN / XGPIOA_14 (open-drain, active-low):
+	 * pinmux GPIO, weak pull-up (PU=bit2, PD=bit3), direction input.
+	 * Matches: 0x03001038=0x3, 0x03001904 PU, 0x03020004 bit14 clear.
+	 */
 	PINMUX_CONFIG(SD0_PWR_EN, XGPIOA_14);   /* PMIC_IRQ */
+	mmio_clrsetbits_32(PINMUX_BASE + 0x904, BIT(3) | BIT(2), BIT(2));
+	mmio_clrbits_32(0x03020004, BIT(14));
 	PINMUX_CONFIG(JTAG_CPU_TMS, XGPIOA_19); /* WUSB3801Q INT */
 	PINMUX_CONFIG(AUX0, XGPIOA_30);         /* WUSB3801Q ID */
 	PINMUX_CONFIG(VIVO_CLK, XGPIOB_22);     /* ICM-42688 INT */

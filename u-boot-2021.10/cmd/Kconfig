@@ -439,6 +439,13 @@ config CMD_BOOT_MODE_NAND
       system can be automatically switched to the inactive partition
       for boot if the related upgrade fails.
       For details, see Android A/B system Description.
+
+config CMD_BOOT_MODE_EMMC
+    bool "boot mode command for emmc flash"
+    depends on MMC
+    help
+      Enable A/B boot function for eMMC. Selects BOOT/BOOT_B and ROOTFS
+      partitions according to boot_slot in U-Boot environment.
 endmenu
 
 menu "Environment commands"
@@ -996,6 +1003,14 @@ config BOOTLOGO
           This provides a way to show bootlogo which is saved in MISC partition.
           When enable this command it will add a new environment variable showlogo
       and will add the showlogo to the beginning of bootcmd
+
+config CMD_JD9853_LOGO
+	bool "jd9853_logo - Zonhor SPI JD9853 early splash"
+	depends on DM_SPI && DM_GPIO
+	help
+	  Initialize the SPI JD9853 panel and show an embedded RGB565 boot
+	  logo before loading the kernel. Used on Zonhor boards with the
+	  172x320 SPI display.
 
 config CMD_IDE
 	bool "ide - Support for IDE drivers"

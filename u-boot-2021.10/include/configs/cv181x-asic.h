@@ -224,6 +224,14 @@
 		#endif /* CONFIG_SKIP_RAMDISK */
 	#elif defined(CONFIG_SD_BOOT) || defined(CONFIG_EMMC_SUPPORT)
 		#define ROOTARGS "root=" ROOTFS_DEV " rootwait rw"
+		#ifdef CONFIG_CMD_BOOT_MODE_EMMC
+			#ifndef ROOTARGSA
+				#define ROOTARGSA ROOTARGS
+			#endif
+			#ifndef ROOTARGSB
+				#define ROOTARGSB ROOTARGS
+			#endif
+		#endif
 	#else
 		#define ROOTARGS "rootfstype=squashfs rootwait ro root=" ROOTFS_DEV
 	#endif
@@ -298,6 +306,12 @@
 		#define SHOWLOGOCMD
 	#endif
 
+	#ifdef CONFIG_CMD_JD9853_LOGO
+		#define SHOW_SPI_LOGO_CMD "jd9853_logo;"
+	#else
+		#define SHOW_SPI_LOGO_CMD
+	#endif
+
 	#define SET_BOOTARGS "setenv bootargs ${reserved_mem} ${root} ${mtdparts} " \
 					"console=$consoledev,$baudrate $othbootargs;"
 
@@ -313,10 +327,10 @@
 		#ifdef CONFIG_ENABLE_ALIOS_UPDATE
 			#define CONFIG_BOOTCOMMAND	"cvi_update_rtos"
 		#else
-			#define CONFIG_BOOTCOMMAND	SHOWLOGOCMD "cvi_update || run norboot || run nandboot ||run emmcboot"
+			#define CONFIG_BOOTCOMMAND	SHOWLOGOCMD SHOW_SPI_LOGO_CMD "cvi_update || run norboot || run nandboot ||run emmcboot"
 		#endif
 	#else
-		#define CONFIG_BOOTCOMMAND	SHOWLOGOCMD "run sdboot"
+		#define CONFIG_BOOTCOMMAND	SHOWLOGOCMD SHOW_SPI_LOGO_CMD "run sdboot"
 	#endif
 
 	#if defined(CONFIG_NAND_SUPPORT)
@@ -342,11 +356,18 @@
 				"sf probe;sf read ${uImage_addr} ${BOOT_PART_OFFSET} ${BOOT_PART_SIZE};" \
 				UBOOT_VBOOT_BOOTM_COMMAND
 	#elif defined(CONFIG_EMMC_SUPPORT)
-		#define CONFIG_EMMCBOOTCOMMAND \
-				SET_BOOTARGS \
-				"mmc dev 0 ;"		\
-				"mmc read ${uImage_addr} ${BOOT_PART_OFFSET} ${BOOT_PART_SIZE} ;"		\
-				UBOOT_VBOOT_BOOTM_COMMAND
+		#if defined(CONFIG_CMD_BOOT_MODE_EMMC)
+			#define CONFIG_EMMCBOOTCOMMAND \
+					"loadboot_emmc ;" \
+					SET_BOOTARGS \
+					UBOOT_VBOOT_BOOTM_COMMAND
+		#else
+			#define CONFIG_EMMCBOOTCOMMAND \
+					SET_BOOTARGS \
+					"mmc dev 0 ;"		\
+					"mmc read ${uImage_addr} ${BOOT_PART_OFFSET} ${BOOT_PART_SIZE} ;"		\
+					UBOOT_VBOOT_BOOTM_COMMAND
+		#endif
 	#endif
 
 #else
