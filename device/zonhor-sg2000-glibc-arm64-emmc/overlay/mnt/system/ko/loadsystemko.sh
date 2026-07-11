@@ -5,6 +5,9 @@ ${CVI_SHOPTS}
 #
 insmod /mnt/system/ko/cv181x_sys.ko
 insmod /mnt/system/ko/cv181x_base.ko
+if ! lsmod | grep -q '^cv181x_pwm '; then
+	insmod /mnt/system/ko/cv181x_pwm.ko
+fi
 insmod /mnt/system/ko/cv181x_rtos_cmdqu.ko
 insmod /mnt/system/ko/cv181x_fast_image.ko
 insmod /mnt/system/ko/cvi_mipi_rx.ko

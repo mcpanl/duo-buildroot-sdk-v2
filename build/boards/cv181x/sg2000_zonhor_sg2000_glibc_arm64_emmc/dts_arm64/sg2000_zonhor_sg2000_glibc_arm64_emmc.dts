@@ -34,6 +34,27 @@
 			wakeup-source;
 		};
 	};
+
+	/* PWM0 on GPIOB_0 (PWM0_BUCK), 4 kHz buzzer */
+	buzzer_amp: buzzer-amp {
+		compatible = "regulator-fixed";
+		regulator-name = "buzzer-amp";
+		regulator-always-on;
+	};
+
+	buzzer {
+		compatible = "pwm-beeper";
+		pwms = <&pwm0 0 250000>;
+		beeper-hz = <4000>;
+		amp-supply = <&buzzer_amp>;
+	};
+};
+
+&{/aliases} {
+	spi0 = &spi0;
+	spi1 = &spi1;
+	spi2 = &spi2;
+	spi3 = &spi3;
 };
 
 &mipi_rx {
@@ -51,6 +72,11 @@
 	axp2101: pmic@34 {
 		compatible = "x-powers,axp2101";
 		reg = <0x34>;
+		/*
+		 * INT# -> PAD_SD0_PWR_EN / GPIOA14 (open-drain, falling edge).
+		 * U-Boot sets XGPIOA_14 + weak pull-up + input; keep &sd
+		 * disabled so the SDHCI driver does not reclaim this pad.
+		 */
 		interrupt-parent = <&porta>;
 		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
 		wakeup-source;
@@ -109,6 +135,7 @@
 &spi3 {
 	status = "okay";
 	num-cs = <1>;
+	spi-max-frequency = <40000000>;
 
 	/delete-node/ spidev@0;
 
@@ -122,6 +149,7 @@
 		rotate = <0>;
 		fps = <30>;
 		backlight = <1>;
+		fbtft,skip-init;
 		dc = <&portb 20 0>;
 		reset = <&portb 12 GPIO_ACTIVE_LOW>;
 		led = <&porta 20 GPIO_ACTIVE_HIGH>;
@@ -130,6 +158,7 @@
 };
 
 &pwm0 {
+	#pwm-cells = <2>;
 	status = "okay";
 };
 
@@ -147,30 +176,22 @@
 	/delete-property/ mute-gpio-r;
 };
 
-/* mipi dsi for u-boot */
+/* mipi dsi blocks unused on Zonhor (SPI JD9853 panel) */
 &vo {
-	compatible = "cvitek,vo";
-	reset-gpio = <&porte 2 GPIO_ACTIVE_LOW>;
-	pwm-gpio = <&porte 0 GPIO_ACTIVE_HIGH>;
-	power-ct-gpio = <&porte 1 GPIO_ACTIVE_HIGH>;
-	status = "okay";
+	status = "disabled";
 };
 
-/* mipi dsi for kernel */
 &mipi_tx {
-	compatible = "cvitek,mipi_tx";
-	reset-gpio = <&porte 2 GPIO_ACTIVE_LOW>;
-	pwm-gpio = <&porte 0 GPIO_ACTIVE_HIGH>;
-	power-ct-gpio = <&porte 1 GPIO_ACTIVE_HIGH>;
-	status = "okay";
+	status = "disabled";
 };
 
+/*
+ * SDIO0 PAD_SD0_PWR_EN is reused as AXP2101 INT# (GPIOA14). The cv181x SD
+ * host would force that pad back to SDIO0_PWR_EN + pull-down on probe, so
+ * leave SD0 disabled; boot/storage uses eMMC, WiFi uses &wifisd (SDIO1).
+ */
 &sd {
-	/delete-property/ cvi-cd-gpios;
-	non-removable;
-	disable-wp;
-	no-1-8-v;
-	max-frequency = <50000000>;
+	status = "disabled";
 };
 
 &wifisd {
@@ -181,6 +202,7 @@
 	sd-uhs-sdr104;
 	min-frequency = <400000>;
 	max-frequency = <187500000>;
+	keep-power-in-suspend;
 };
 
 &wifi_pin {
