@@ -117,6 +117,9 @@ ${UBOOT_PATH}/${UBOOT_OUTPUT_FOLDER}:
 
 UBOOT_OUTPUT_CONFIG_PATH := ${UBOOT_PATH}/${UBOOT_OUTPUT_FOLDER}/.config
 UBOOT_DEFAULT_CONFIG_PATH := ${BUILD_PATH}/boards/${CHIP_ARCH_L}/${PROJECT_FULLNAME}/u-boot/${UBOOT_CONFIG_NAME}
+SPI_BOOTLOGO_PNG := ${BUILD_PATH}/../logo/boot_logo.png
+SPI_BOOTLOGO_RGB565 := ${BUILD_PATH}/generated/spi_bootlogo/logo_172x320.rgb565
+GEN_SPI_BOOTLOGO_PY := ${BUILD_PATH}/scripts/gen_spi_bootlogo.py
 ifeq ($(CONFIG_UBOOT_SPL_CUSTOM),y)
 UBOOT-SPL_DEFAULT_CONFIG_PATH := ${BUILD_PATH}/boards/${CHIP_ARCH_L}/${PROJECT_FULLNAME}/u-boot/${UBOOT-SPL_CONFIG_NAME}
 endif
@@ -135,6 +138,16 @@ endif
 ifeq ($(STORAGE_TYPE), spinor)
 	$(call uboot_erasesize_set)
 endif
+
+.PHONY: spi-bootlogo
+spi-bootlogo: ${UBOOT_OUTPUT_CONFIG_PATH}
+	$(call print_target)
+	@if grep -q "CONFIG_CMD_JD9853_LOGO=y" ${UBOOT_OUTPUT_CONFIG_PATH}; then \
+		mkdir -p $$(dirname ${SPI_BOOTLOGO_RGB565}); \
+		python3 ${GEN_SPI_BOOTLOGO_PY} -i ${SPI_BOOTLOGO_PNG} -o ${SPI_BOOTLOGO_RGB565}; \
+	else \
+		echo "SPI bootlogo disabled (CONFIG_CMD_JD9853_LOGO), skip rgb565 generation"; \
+	fi
 
 UBOOT_CVI_BOARD_INIT_PATH := ${UBOOT_PATH}/board/cvitek/cvi_board_init.c
 UBOOT_CVITEK_PATH := ${UBOOT_PATH}/include/cvitek/cvitek.h
@@ -184,6 +197,7 @@ endif
 
 u-boot-build: memory-map
 u-boot-build: u-boot-dts
+u-boot-build: spi-bootlogo
 u-boot-build: ${UBOOT_PATH}/${UBOOT_OUTPUT_FOLDER} ${UBOOT_CVIPART_DEP} ${UBOOT_OUTPUT_CONFIG_PATH}
 	$(call print_target)
 	${Q}ln -snrf ${CVI_BOARD_MEMMAP_H_PATH} ${UBOOT_PATH}/include/
@@ -625,6 +639,12 @@ br-rootfs-pack:
 	# copy rootfs to rawimg dir
 	${Q}cp $(TARGET_OUTPUT_DIR)/images/rootfs.ext4 $(OUTPUT_DIR)/rawimages/rootfs_ext4.$(STORAGE_TYPE)
 	$(call raw2cimg ,rootfs_ext4.$(STORAGE_TYPE))
+ifeq ($(CONFIG_AB_SYSTEM),y)
+ifneq ($(STORAGE_TYPE),sd)
+	${Q}cp $(OUTPUT_DIR)/rawimages/rootfs_ext4.$(STORAGE_TYPE) $(OUTPUT_DIR)/rawimages/rootfs_b_ext4.$(STORAGE_TYPE)
+	$(call raw2cimg ,rootfs_b_ext4.$(STORAGE_TYPE))
+endif
+endif
 
 # TODO A/B boot is currently not supported when CONFIG_BUILDROOT_FS is enabled
 ifeq ($(CONFIG_BUILDROOT_FS),y)

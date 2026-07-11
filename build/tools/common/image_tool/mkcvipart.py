@@ -86,9 +86,22 @@ def gen_cvipart_h(output, parser):
             of.write("mmcblk0boot0:1M(fip),1M(fip_bak);\"")
             of.write("\n")
 
+            rootfs_a = None
+            rootfs_b = None
             for i, p in enumerate(parts):
                 if p["label"] == "ROOTFS":
-                    of.write('#define ROOTFS_DEV "/dev/mmcblk0p%d"\n' % (i + 1))
+                    rootfs_a = i + 1
+                elif p["label"] == "ROOTFS_B":
+                    rootfs_b = i + 1
+            if rootfs_a is not None:
+                of.write('#define ROOTFS_DEV "/dev/mmcblk0p%d"\n' % rootfs_a)
+            if rootfs_a is not None and rootfs_b is not None:
+                of.write(
+                    '#define ROOTARGSA "root=/dev/mmcblk0p%d rootwait rw"\n' % rootfs_a
+                )
+                of.write(
+                    '#define ROOTARGSB "root=/dev/mmcblk0p%d rootwait rw"\n' % rootfs_b
+                )
 
         elif parser.getStorage() == "spinand":
             if env_exist:
