@@ -24,8 +24,19 @@
 #define TXBUFLEN	(4 * PAGE_SIZE)
 #define RGB565_BLUE	0x001F
 
+static int init_display_preserve(struct fbtft_par *par)
+{
+	/* Orientation must match U-Boot jd9853_logo (mirror X + invert) */
+	write_reg(par, MIPI_DCS_SET_ADDRESS_MODE, BIT(6));
+	write_reg(par, 0x21);
+	return 0;
+}
+
 static int init_display(struct fbtft_par *par)
 {
+	if (par->skip_init)
+		return init_display_preserve(par);
+
 	par->fbtftops.reset(par);
 
 	if (par->gpio.cs)

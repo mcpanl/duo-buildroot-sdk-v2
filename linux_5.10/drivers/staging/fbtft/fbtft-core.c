@@ -94,6 +94,21 @@ static int fbtft_request_one_gpio(struct fbtft_par *par,
 			return gpio;
 		}
 
+		if (par->skip_init && !strcmp(name, "reset")) {
+			ret = devm_gpio_request(dev, gpio, dev->driver->name);
+			if (ret) {
+				dev_err(dev,
+					"gpio_request('%s'=%d) failed with %d\n",
+					name, gpio, ret);
+				return ret;
+			}
+			*gpiop = gpio_to_desc(gpio);
+			fbtft_par_dbg(DEBUG_REQUEST_GPIOS, par,
+				      "%s: '%s' = GPIO%d (skip-init, no reset)\n",
+				      __func__, name, gpio);
+			return 0;
+		}
+
 		//active low translates to initially low
 		flags = (of_flags & OF_GPIO_ACTIVE_LOW) ? GPIOF_OUT_INIT_LOW : GPIOF_OUT_INIT_HIGH;
 		ret = devm_gpio_request_one(dev, gpio, flags, dev->driver->name);
@@ -206,8 +221,19 @@ void fbtft_register_backlight(struct fbtft_par *par)
 	bl_props.type = BACKLIGHT_RAW;
 	/* Assume backlight is off, get polarity from current state of pin */
 	bl_props.power = FB_BLANK_POWERDOWN;
-	if (!gpiod_get_value(par->gpio.led[0]))
+	if (par->skip_init) {
+		/*
+		 * U-Boot left the panel/backlight running. Keep UNBLANK and
+		 * treat the current pin level as the ON polarity so probe
+		 * does not invert an already-on active-high LED.
+		 */
+		bl_props.power = FB_BLANK_UNBLANK;
+		par->polarity = !!gpiod_get_value(par->gpio.led[0]);
+		if (!par->polarity)
+			par->polarity = true;
+	} else if (!gpiod_get_value(par->gpio.led[0])) {
 		par->polarity = true;
+	}
 
 	bd = backlight_device_register(dev_driver_string(par->info->device),
 				       par->info->device, par,
@@ -722,6 +748,7 @@ struct fb_info *fbtft_framebuffer_alloc(struct fbtft_display *display,
 	par->buf = buf;
 	spin_lock_init(&par->dirty_lock);
 	par->bgr = pdata->bgr;
+	par->skip_init = pdata->skip_init;
 	par->startbyte = pdata->startbyte;
 	par->init_sequence = init_sequence;
 	par->gamma.curves = gamma_curves;
@@ -838,19 +865,24 @@ int fbtft_register_framebuffer(struct fb_info *fb_info)
 			goto reg_fail;
 	}
 
-	ret = par->fbtftops.init_display(par);
-	if (ret < 0)
-		goto reg_fail;
-	if (par->fbtftops.set_var) {
-		ret = par->fbtftops.set_var(par);
+	if (par->skip_init) {
+		dev_info(fb_info->device,
+			 "fbtft skip-init: preserving U-Boot panel state\n");
+	} else {
+		ret = par->fbtftops.init_display(par);
 		if (ret < 0)
 			goto reg_fail;
+		if (par->fbtftops.set_var) {
+			ret = par->fbtftops.set_var(par);
+			if (ret < 0)
+				goto reg_fail;
+		}
+
+		/* update the entire display */
+		par->fbtftops.update_display(par, 0, par->info->var.yres - 1);
 	}
 
-	/* update the entire display */
-	par->fbtftops.update_display(par, 0, par->info->var.yres - 1);
-
-	if (par->fbtftops.set_gamma && par->gamma.curves) {
+	if (!par->skip_init && par->fbtftops.set_gamma && par->gamma.curves) {
 		ret = par->fbtftops.set_gamma(par, par->gamma.curves);
 		if (ret)
 			goto reg_fail;
@@ -1203,6 +1235,7 @@ static struct fbtft_platform_data *fbtft_properties_read(struct device *dev)
 	pdata->fps = fbtft_property_value(dev, "fps");
 	pdata->txbuflen = fbtft_property_value(dev, "txbuflen");
 	pdata->startbyte = fbtft_property_value(dev, "startbyte");
+	pdata->skip_init = device_property_read_bool(dev, "fbtft,skip-init");
 	device_property_read_string(dev, "gamma", (const char **)&pdata->gamma);
 
 	if (device_property_present(dev, "led-gpios"))

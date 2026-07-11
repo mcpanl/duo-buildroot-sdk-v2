@@ -141,6 +141,7 @@ struct fbtft_platform_data {
 	u8 startbyte;
 	char *gamma;
 	void *extra;
+	bool skip_init;
 };
 
 /**
@@ -229,6 +230,7 @@ struct fbtft_par {
 	bool bgr;
 	void *extra;
 	bool polarity;
+	bool skip_init;
 };
 
 #define NUMARGS(...)  (sizeof((int[]){__VA_ARGS__}) / sizeof(int))
