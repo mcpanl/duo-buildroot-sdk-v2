@@ -48,6 +48,16 @@
 		beeper-hz = <4000>;
 		amp-supply = <&buzzer_amp>;
 	};
+
+	/* AIC8800 BT bluesleep (HOST_WAKE_BT / BT_WAKE_HOST) */
+	btlpm {
+		compatible = "allwinner,sunxi-btlpm";
+		bt_wake = <&porte 10 GPIO_ACTIVE_HIGH>;
+		bt_hostwake = <&porte 11 GPIO_ACTIVE_HIGH>;
+		uart_index = <4>;
+		wakeup-source;
+		status = "okay";
+	};
 };
 
 &{/aliases} {
@@ -59,6 +69,22 @@
 
 &mipi_rx {
 	snsr-reset = <&porta 2 GPIO_ACTIVE_LOW>, <&porta 2 GPIO_ACTIVE_LOW>, <&porta 2 GPIO_ACTIVE_LOW>;
+};
+
+&porta {
+	cam1-a3-fixed-low {
+		gpio-hog;
+		gpios = <3 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "cam1-a3-fixed-low";
+	};
+
+	cam1-a4-fixed-high {
+		gpio-hog;
+		gpios = <4 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "cam1-a4-fixed-high";
+	};
 };
 
 &i2c0 {
@@ -81,6 +107,16 @@
 		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
 		wakeup-source;
 		status = "okay";
+
+		regulators {
+			dcdc4 {
+				regulator-name = "dcdc4";
+				regulator-min-microvolt = <1100000>;
+				regulator-max-microvolt = <1100000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+		};
 
 		battery-power-supply {
 			compatible = "x-powers,axp2101-battery-power-supply";
@@ -121,7 +157,7 @@
 };
 
 &i2c2 {
-	status = "okay";
+	status = "disabled";
 };
 
 &i2c3 {
@@ -209,7 +245,8 @@
 	status = "okay";
 	compatible = "cvitek,wifi-pin";
 	poweron-gpio = <&porta 15 GPIO_ACTIVE_HIGH>;
-	wakeup-gpio = <&porte 7 GPIO_ACTIVE_HIGH>;
+	wakeup-gpio = <&porte 5 GPIO_ACTIVE_HIGH>;     /* WIFI_WAKE_HOST */
+	host-wake-gpio = <&porte 3 GPIO_ACTIVE_HIGH>; /* HOST_WAKE_WF */
 };
 
 &usb {

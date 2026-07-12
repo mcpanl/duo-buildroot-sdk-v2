@@ -17,6 +17,12 @@ static void set_rtc_register_for_power(void)
 #define CV181X_REG_DIV_CLK_SPI	0x100
 #define CV181X_SPI_PARENT_HZ	1000000000UL
 
+#define CV181X_GPIOA_BASE	0x03020000
+#define CV181X_GPIO_SWPORTA_DR	0x000
+#define CV181X_GPIO_SWPORTA_DDR	0x004
+#define GPIOA3			BIT(3)
+#define GPIOA4			BIT(4)
+
 int dw_spi_get_clk(struct udevice *bus, ulong *rate)
 {
 	u32 en, div_reg, div;
@@ -39,6 +45,22 @@ int dw_spi_get_clk(struct udevice *bus, ulong *rate)
 	return 0;
 }
 
+static void zonhor_config_cam_gpio_fixed(void)
+{
+	/*
+	 * CAM1 pads are board sideband GPIOs:
+	 *   CAM_MCLK1 -> GPIOA3, fixed output low
+	 *   CAM_PD1   -> GPIOA4, fixed output high
+	 * Set data before direction to avoid a visible high pulse on A3.
+	 */
+	PINMUX_CONFIG(CAM_MCLK1, XGPIOA_3);
+	PINMUX_CONFIG(CAM_PD1, XGPIOA_4);
+	mmio_clrsetbits_32(CV181X_GPIOA_BASE + CV181X_GPIO_SWPORTA_DR,
+			    GPIOA3 | GPIOA4, GPIOA4);
+	mmio_clrsetbits_32(CV181X_GPIOA_BASE + CV181X_GPIO_SWPORTA_DDR,
+			    GPIOA3 | GPIOA4, GPIOA3 | GPIOA4);
+}
+
 int cvi_board_init(void)
 {
 	/* Camera0 */
@@ -47,11 +69,8 @@ int cvi_board_init(void)
 	PINMUX_CONFIG(CAM_MCLK0, CAM_MCLK0);
 	PINMUX_CONFIG(CAM_RST0, XGPIOA_2);
 
-	/* Camera1 */
-	PINMUX_CONFIG(IIC2_SDA, IIC2_SDA);
-	PINMUX_CONFIG(IIC2_SCL, IIC2_SCL);
-	PINMUX_CONFIG(CAM_MCLK1, CAM_MCLK1);
-	PINMUX_CONFIG(CAM_PD1, XGPIOA_4);
+	/* Camera1 disabled; keep its sideband pads as fixed GPIO outputs. */
+	zonhor_config_cam_gpio_fixed();
 
 	/* User/Sys LEDs */
 	PINMUX_CONFIG(JTAG_CPU_TCK, XGPIOA_18); /* USER_LED */
@@ -90,6 +109,14 @@ int cvi_board_init(void)
 
 	/* Screen/touch reserved GPIOs */
 	PINMUX_CONFIG(JTAG_CPU_TRST, XGPIOA_20); /* LCD backlight */
+	/*
+	 * Active-high backlight on PAD_JTAG_CPU_TRST / XGPIOA_20.
+	 * Pad conf @ 0x03001938: PU=bit2, PD=bit3. Force pull-down so that
+	 * when mem (S2RAM) drops the GPIO bank, the pin does not float high
+	 * (JTAG TRST default pull-up) and re-light the panel. freeze keeps
+	 * GPIO drive so this only matters for deep sleep.
+	 */
+	mmio_clrsetbits_32(PINMUX_BASE + 0x938, BIT(3) | BIT(2), BIT(3));
 	PINMUX_CONFIG(IIC0_SCL, XGPIOA_28);      /* Touch IRQ */
 	PINMUX_CONFIG(VIVO_D1, XGPIOB_20);       /* LCD RS */
 	PINMUX_CONFIG(VIVO_D0, XGPIOB_21);       /* Touch reset */
@@ -99,8 +126,11 @@ int cvi_board_init(void)
 	/* USB */
 	PINMUX_CONFIG(USB_VBUS_EN, XGPIOB_5);
 
-	/* WIFI/BT */
-	PINMUX_CONFIG(CLK32K, PWR_GPIO_10);
+	/* WIFI/BT wake + HCI UART4 */
+	PINMUX_CONFIG(PWR_SEQ1, PWR_GPIO_3);   /* HOST_WAKE_WF */
+	PINMUX_CONFIG(PWR_SEQ3, PWR_GPIO_5);   /* WIFI_WAKE_HOST */
+	PINMUX_CONFIG(CLK32K, PWR_GPIO_10);    /* HOST_WAKE_BT */
+	PINMUX_CONFIG(CLK25M, PWR_GPIO_11);    /* BT_WAKE_HOST */
 	PINMUX_CONFIG(UART2_RX, UART4_RX);
 	PINMUX_CONFIG(UART2_TX, UART4_TX);
 	PINMUX_CONFIG(UART2_CTS, UART4_CTS);
