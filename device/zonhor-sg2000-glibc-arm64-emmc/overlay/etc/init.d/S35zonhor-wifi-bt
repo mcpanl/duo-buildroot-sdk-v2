@@ -1,0 +1,44 @@
+#!/bin/sh
+#
+# Bring up AIC8800 WiFi/BT before bluetoothd (S40) and before heavy MPP (S99user).
+# Keeps wlan0 down at boot to avoid RF current spikes during camera/codec init.
+#
+
+INIT_SCRIPT=/usr/sbin/zonhor-wifi-bt-init.sh
+
+case "$1" in
+start)
+	if [ ! -x "${INIT_SCRIPT}" ]; then
+		exit 0
+	fi
+	echo "Starting zonhor WiFi/BT..."
+	"${INIT_SCRIPT}" boot || {
+		echo "zonhor WiFi/BT init failed (see /tmp/zonhor-wifi-bt-init.log)"
+		exit 0
+	}
+	echo "OK"
+	;;
+stop)
+	killall hciattach 2>/dev/null || true
+	if lsmod | grep -q '^aic8800_btlpm '; then
+		rmmod aic8800_btlpm 2>/dev/null || true
+	fi
+	if lsmod | grep -q '^aic8800_fdrv '; then
+		rmmod aic8800_fdrv 2>/dev/null || true
+	fi
+	if lsmod | grep -q '^aic8800_bsp '; then
+		rmmod aic8800_bsp 2>/dev/null || true
+	fi
+	;;
+restart|reload)
+	"$0" stop
+	sleep 1
+	"$0" start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|reload}"
+	exit 1
+	;;
+esac
+
+exit 0

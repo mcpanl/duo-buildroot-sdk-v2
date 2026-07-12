@@ -157,37 +157,21 @@ wifi_bt_unload() {
 
 wifi_bt_reload() {
 	echo "wifi/bt: reload modules after mem" >&2
-	if [ ! -f "${KO_DIR}/aic8800_bsp.ko" ]; then
-		echo "wifi/bt: missing ${KO_DIR}/aic8800_bsp.ko" >&2
+	if [ -x /usr/sbin/zonhor-wifi-bt-init.sh ]; then
+		/usr/sbin/zonhor-wifi-bt-init.sh resume || {
+			echo "wifi/bt: zonhor-wifi-bt-init resume failed" >&2
+			return 1
+		}
+	else
+		echo "wifi/bt: missing zonhor-wifi-bt-init.sh" >&2
 		return 1
 	fi
 
-	if ! mod_loaded aic8800_bsp; then
-		insmod "${KO_DIR}/aic8800_bsp.ko" || {
-			echo "wifi/bt: insmod aic8800_bsp failed" >&2
-			return 1
-		}
-		sleep 0.5
-	fi
-	if ! mod_loaded aic8800_fdrv; then
-		insmod "${KO_DIR}/aic8800_fdrv.ko" || {
-			echo "wifi/bt: insmod aic8800_fdrv failed" >&2
-			return 1
-		}
-		sleep 0.5
-	fi
-	if ! mod_loaded aic8800_btlpm; then
-		insmod "${KO_DIR}/aic8800_btlpm.ko" || {
-			echo "wifi/bt: insmod aic8800_btlpm failed" >&2
-			return 1
-		}
+	# After mem, BlueZ needs an active HCI controller.
+	if command -v hciconfig >/dev/null 2>&1; then
+		hciconfig hci0 up 2>/dev/null || true
 	fi
 
-	if [ -x /usr/sbin/zonhor-mac-from-uid ]; then
-		/usr/sbin/zonhor-mac-from-uid wlan0 2>/dev/null || true
-	fi
-
-	bt_start
 	wifi_clients_start
 	echo "wifi/bt: restore done" >&2
 }
