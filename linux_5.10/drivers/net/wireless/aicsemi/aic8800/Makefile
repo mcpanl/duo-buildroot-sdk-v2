@@ -13,8 +13,10 @@ export CONFIG_USE_FW_REQUEST = n
 export CONFIG_PREALLOC_RX_SKB = n
 export CONFIG_PREALLOC_TXQ = y
 export CONFIG_OOB = n
-export CONFIG_GPIO_WAKEUP = n
+export CONFIG_GPIO_WAKEUP = y
+export CONFIG_WIFI_SUSPEND_FOR_LINUX = y
 export CONFIG_RESV_MEM_SUPPORT = y
+export CONFIG_SUPPORT_LPM = y
 ###################################
 
 ########## Platform support list ##########

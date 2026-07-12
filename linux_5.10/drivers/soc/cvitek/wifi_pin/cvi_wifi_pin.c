@@ -19,6 +19,7 @@ struct cvi_wifi_pin_dev {
 	struct device *dev;
 	int power_gpio;
 	int wakeup_gpio;
+	int host_wake_gpio;
 };
 
 static struct cvi_wifi_pin_dev *wifi_dev;
@@ -53,6 +54,21 @@ int cvi_get_wifi_wakeup_gpio(void)
 }
 EXPORT_SYMBOL_GPL(cvi_get_wifi_wakeup_gpio);
 
+int cvi_get_wifi_host_wake_gpio(void)
+{
+	if (wifi_dev) {
+		if (wifi_dev->host_wake_gpio > 0)
+			return wifi_dev->host_wake_gpio;
+
+		pr_err("Wifi host-wake pin is not available, plz check dts\n");
+		return 0;
+	}
+
+	pr_err("Wifi host-wake pin is not available, plz check wifi_pin node in dts\n");
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cvi_get_wifi_host_wake_gpio);
+
 static int cvi_wifi_pin_probe(struct platform_device *pdev)
 {
 
@@ -67,6 +83,7 @@ static int cvi_wifi_pin_probe(struct platform_device *pdev)
 	if (np) {
 		wifi_dev->power_gpio = of_get_named_gpio(np, "poweron-gpio", 0);
 		wifi_dev->wakeup_gpio = of_get_named_gpio(np, "wakeup-gpio", 0);
+		wifi_dev->host_wake_gpio = of_get_named_gpio(np, "host-wake-gpio", 0);
 	}
 
 	return 0;

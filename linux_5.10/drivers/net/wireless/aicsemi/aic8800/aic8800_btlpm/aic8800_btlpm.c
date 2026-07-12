@@ -11,8 +11,6 @@
  *
  */
 
-#define DEBUG
-
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/init.h>
