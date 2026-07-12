@@ -173,16 +173,23 @@ static int fbtft_backlight_update_status(struct backlight_device *bd)
 {
 	struct fbtft_par *par = bl_get_data(bd);
 	bool polarity = par->polarity;
+	bool on;
+
+	/*
+	 * Honor bl_power / fb_blank / suspend. Note: bl_power uses FB_BLANK_*
+	 * (0=UNBLANK=on, >=1=off) — that is not GPIO polarity inversion.
+	 */
+	on = (bd->props.power == FB_BLANK_UNBLANK) &&
+	     (bd->props.fb_blank == FB_BLANK_UNBLANK) &&
+	     !(bd->props.state & BL_CORE_FBBLANK) &&
+	     !(bd->props.state & BL_CORE_SUSPENDED);
 
 	fbtft_par_dbg(DEBUG_BACKLIGHT, par,
-		      "%s: polarity=%d, power=%d, fb_blank=%d\n",
-		      __func__, polarity, bd->props.power, bd->props.fb_blank);
+		      "%s: polarity=%d, power=%d, fb_blank=%d, state=0x%x, on=%d\n",
+		      __func__, polarity, bd->props.power, bd->props.fb_blank,
+		      bd->props.state, on);
 
-	if ((bd->props.power == FB_BLANK_UNBLANK) &&
-	    (bd->props.fb_blank == FB_BLANK_UNBLANK))
-		gpiod_set_value(par->gpio.led[0], polarity);
-	else
-		gpiod_set_value(par->gpio.led[0], !polarity);
+	gpiod_set_value(par->gpio.led[0], on ? polarity : !polarity);
 
 	return 0;
 }
@@ -203,6 +210,7 @@ void fbtft_unregister_backlight(struct fbtft_par *par)
 }
 
 static const struct backlight_ops fbtft_bl_ops = {
+	.options	= BL_CORE_SUSPENDRESUME,
 	.get_brightness	= fbtft_backlight_get_brightness,
 	.update_status	= fbtft_backlight_update_status,
 };

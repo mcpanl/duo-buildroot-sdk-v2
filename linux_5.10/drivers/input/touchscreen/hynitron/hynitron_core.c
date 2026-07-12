@@ -1379,7 +1379,7 @@ int hyn_irq_init(struct i2c_client *client)
 void hyn_enter_deep_sleep(void)
 {
     int ret = 0;
-	HYN_ERROR("hyn_enter_deep_sleep");
+	HYN_INFO("hyn_enter_deep_sleep");
 /* TP enter sleep mode */
 	if(hyn_ts_data->config_chip_product_line==HYN_CHIP_PRODUCT_LINE_MUT_CAP)
 	{
@@ -1388,7 +1388,7 @@ void hyn_enter_deep_sleep(void)
 		buf[0]=HYN_REG_MUT_DEEP_SLEEP_MODE>>8;
 		buf[1]=HYN_REG_MUT_DEEP_SLEEP_MODE&0xff;
 	
-		HYN_ERROR("Set TP to sleep mode mutcap");
+		HYN_INFO("Set TP to sleep mode mutcap");
    		ret = cst3xx_i2c_write(hyn_ts_data->client, buf,2);
 	    if (ret < 0){
 	        HYN_ERROR("Set TP to sleep mode fail, ret=%d!", ret);
@@ -1396,13 +1396,22 @@ void hyn_enter_deep_sleep(void)
 		
 	}else if(hyn_ts_data->config_chip_product_line==HYN_CHIP_PRODUCT_LINE_SEL_CAP){
 	//selfcap
-		HYN_ERROR("Set TP to sleep mode selfcap");
+		HYN_INFO("Set TP to sleep mode selfcap");
 		ret = hyn_i2c_write_byte(hyn_ts_data->client, HYN_REG_CAP_POWER_MODE, HYN_REG_CAP_POWER_MODE_SLEEP_VALUE);
 	    if (ret < 0){
 	        HYN_ERROR("Set TP to sleep mode fail, ret=%d!", ret);
 	    }
 	}
 
+	/*
+	 * If the panel NACKs the sleep command, hold reset low so it cannot
+	 * keep the I2C bus busy or assert INT during freeze/s2idle.
+	 * hyn_resume() already runs hyn_reset_proc() to bring it back.
+	 */
+	if (ret < 0 && gpio_is_valid(hyn_ts_data->pdata->reset_gpio)) {
+		HYN_ERROR("Hold TP reset for suspend fallback");
+		gpio_direction_output(hyn_ts_data->pdata->reset_gpio, 0);
+	}
 }
 
 
@@ -1698,11 +1707,10 @@ static void hyn_suspend(struct hynitron_ts_data *ts)
 	return;
 #endif
 
-
-    hyn_irq_disable();
-
+	/* Sleep command first; some CST self-cap chips NACK after IRQ disable */
 	hyn_enter_deep_sleep();
-    
+	hyn_irq_disable();
+
     HYN_FUNC_EXIT();
 }
 
