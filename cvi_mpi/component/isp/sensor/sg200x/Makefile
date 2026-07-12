@@ -331,6 +331,9 @@ sony_imx335:
 sony_imx675:
 	$(call MAKE_SENSOR, ${@})
 
+sony_imx678:
+	$(call MAKE_SENSOR, ${@})
+
 techpoint_tp2825:
 	$(call MAKE_SENSOR, ${@})
 

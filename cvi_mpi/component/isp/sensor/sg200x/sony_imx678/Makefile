@@ -1,28 +1,24 @@
 SHELL = /bin/bash
-#
 ifeq ($(PARAM_FILE), )
-PARAM_FILE=../../../../mpi_param.mk
-include $(PARAM_FILE)
+	PARAM_FILE=../../../../../mpi_param.mk
+	include $(PARAM_FILE)
 endif
-#
-ifneq ($(BUILD_PATH), )
-include ../../sensor.mk
-endif
-#
-SRCS = $(shell find $(sensor-y) -name '*.c')
-OBJS = $(SRCS:.c=.o) $(SENSOR_LIST_INC)/sensor_list.o
-#
-TARGET_A = $(MW_LIB)/libsns_full.a
-TARGET_SO = $(MW_LIB)/libsns_full.so
 
-INCS = -I$(MW_INC) -I$(ISP_INC) -I$(KERNEL_INC)
+SDIR = $(CURDIR)
+SRCS = $(wildcard $(SDIR)/*.c)
+INCS = -I$(MW_INC) -I$(ISP_INC) -I$(KERNEL_INC) -I./include
+OBJS = $(SRCS:.c=.o)
+DEPS = $(SRCS:.c=.d)
+TARGET_A = $(MW_LIB)/libsns_imx678.a
+TARGET_SO = $(MW_LIB)/libsns_imx678.so
+
 EXTRA_CFLAGS = $(INCS)
 EXTRA_LDFLAGS =
 
 .PHONY : clean all
 all : $(TARGET_A) $(TARGET_SO)
 
-%.o: %.c
+$(SDIR)/%.o: $(SDIR)/%.c
 	@$(CC) $(DEPFLAGS) $(CFLAGS) $(EXTRA_CFLAGS) -c $< -o $@
 	@echo [$(notdir $(CC))] $(notdir $@)
 
@@ -35,4 +31,6 @@ $(TARGET_SO): $(OBJS)
 	@echo -e $(GREEN)[LINK]$(END)[$(notdir $(LD))] $(notdir $@)
 
 clean:
-	@rm -f $(TARGET_A) $(TARGET_SO)
+	@rm -f $(OBJS) $(DEPS) $(TARGET_A) $(TARGET_SO)
+
+-include $(DEPS)

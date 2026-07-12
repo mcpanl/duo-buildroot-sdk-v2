@@ -40,7 +40,7 @@ LIBS += -lnanomsg
 endif
 
 EXTRA_CFLAGS = $(INCS) $(DEFS)
-EXTRA_LDFLAGS = $(LIBS) -lpthread -lm -lini
+EXTRA_LDFLAGS = $(LIBS) $(SNS_LIB) -lpthread -lm -lini
 
 ifeq ($(TARGET_MACHINE), riscv64-unknown-linux-musl)
   EXTRA_LDFLAGS += $(MW_PATH)/modules/bin/prebuilt/riscv64-unknown-linux-musl/libcvi_json-c.a

@@ -235,6 +235,7 @@ extern ISP_SNS_OBJ_S stSnsImx335_Obj;
 extern ISP_SNS_OBJ_S stSnsImx347_Obj;
 extern ISP_SNS_OBJ_S stSnsImx385_Obj;
 extern ISP_SNS_OBJ_S stSnsImx675_Obj;
+extern ISP_SNS_OBJ_S stSnsImx678_Obj;
 extern ISP_SNS_OBJ_S stSnsTP2850_Obj;
 extern ISP_SNS_OBJ_S stSnsTP2825_Obj;
 extern ISP_SNS_OBJ_S stSnsTP2863_Obj;

@@ -2,15 +2,19 @@ SHELL = /bin/bash
 #
 CHIP_ARCH	?= CV181X
 #
-ifneq ($(BUILD_PATH),)
-include $(BUILD_PATH)/.config
-endif
-## setup path ##
+## setup path (must be before BUILD_PATH includes) ##
 ROOT_DIR:=$(shell dirname $(realpath $(PARAM_FILE)))
 export MW_PATH	:= $(ROOT_DIR)
 export MW_INC 	:= $(MW_PATH)/include
 export MW_LIB 	:= $(MW_PATH)/lib
 export MW_3RD_LIB := $(MW_PATH)/lib/3rd
+#
+ifneq ($(BUILD_PATH),)
+include $(BUILD_PATH)/.config
+include $(ROOT_DIR)/component/isp/common/Kbuild
+CFLAGS += $(KBUILD_DEFINES)
+CXXFLAGS += $(KBUILD_DEFINES)
+endif
 #
 ## GCC COMPILER ##
 CC := $(CROSS_COMPILE)gcc

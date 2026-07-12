@@ -100,6 +100,11 @@ sensor-$(CONFIG_SENSOR_SONY_IMX327_FPGA)     += sony_imx327_fpga
 sensor-$(CONFIG_SENSOR_SONY_IMX327_SUBLVDS)  += sony_imx327_sublvds
 sensor-$(CONFIG_SENSOR_SONY_IMX335)          += sony_imx335
 sensor-$(CONFIG_SENSOR_SONY_IMX675)          += sony_imx675
+ifeq ($(CHIP_ARCH), CV181X)
+sensor-$(CONFIG_SENSOR_SONY_IMX678)          += ../sg200x/sony_imx678
+else
+sensor-$(CONFIG_SENSOR_SONY_IMX678)          += sony_imx678
+endif
 sensor-$(CONFIG_SENSOR_TECHPOINT_TP2825)     += techpoint_tp2825
 sensor-$(CONFIG_SENSOR_TECHPOINT_TP2863)     += techpoint_tp2863
 sensor-$(CONFIG_SENSOR_LONTIUM_LT6911)       += lontium_lt6911
