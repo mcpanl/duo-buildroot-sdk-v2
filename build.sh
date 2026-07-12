@@ -22,7 +22,7 @@ function milkv_clean_stale_images()
   fi
 
   pushd "${OUTPUT_DIR}" > /dev/null || return 0
-  rm -f *.img* upgrade.zip 2>/dev/null
+  rm -f *.img* upgrade.zip upgrade_ota.zip 2>/dev/null
   popd > /dev/null
 }
 
@@ -31,6 +31,7 @@ function milkv_pack_and_report()
   milkv_pack
   if [ $? -eq 0 ]; then
     show_info "Build board ${MILKV_BOARD} success!"
+    milkv_print_firmware_version
   else
     show_err "Build board ${MILKV_BOARD} failed!"
     exit 1
@@ -69,12 +70,19 @@ function milkv_pack_emmc()
 {
   [ ! -d out ] && mkdir out
 
+  stamp="`date +%Y-%m%d-%H%M`"
   img_in="${OUTPUT_DIR}/upgrade.zip"
-  img_out="${MILKV_BOARD}_`date +%Y-%m%d-%H%M`.zip"
+  img_out="${MILKV_BOARD}_${stamp}.zip"
+  ota_in="${OUTPUT_DIR}/upgrade_ota.zip"
+  ota_out="${MILKV_BOARD}_ota_${stamp}.zip"
 
   if [ -f "${img_in}" ]; then
     mv ${img_in} out/${img_out}
     show_info "Create eMMC image successful: out/${img_out}"
+    if [ -f "${ota_in}" ]; then
+      mv ${ota_in} out/${ota_out}
+      show_info "Create eMMC OTA image successful: out/${ota_out}"
+    fi
   else
     show_err "Create eMMC image failed!"
     exit 1

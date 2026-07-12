@@ -201,6 +201,50 @@ function pack_cfg
   fi
 )}
 
+function milkv_ota_enabled()
+{
+  if [ -n "${MILKV_OTA_ENABLED}" ]; then
+    return 0
+  fi
+  if [ -n "${MV_BOARD}" ] && [ -f "${TOP_DIR}/device/${MV_BOARD}/overlay/etc/init.d/S05ota" ]; then
+    return 0
+  fi
+  return 1
+}
+
+function milkv_read_firmware_version()
+{
+  local info="$1"
+
+  VERSION=$(grep -E '^VERSION=' "$info" | head -1 | sed 's/^VERSION=//' | tr -d '"')
+  BUILD_TIME=$(grep -E '^BUILD_TIME=' "$info" | head -1 | sed 's/^BUILD_TIME=//' | sed 's/^"\(.*\)"$/\1/')
+  BOARD=$(grep -E '^BOARD=' "$info" | head -1 | sed 's/^BOARD=//' | tr -d '"')
+}
+
+function milkv_print_firmware_version()
+{
+  local info="${OUTPUT_DIR}/firmware-version.txt"
+
+  if ! milkv_ota_enabled; then
+    return 0
+  fi
+  if [ ! -f "${info}" ]; then
+    return 0
+  fi
+
+  milkv_read_firmware_version "${info}"
+
+  printf "\n"
+  show_info "========================================"
+  show_info "Firmware version: ${VERSION:-unknown}"
+  show_info "Build time:       ${BUILD_TIME:-unknown}"
+  if [ -n "${BOARD:-}" ]; then
+    show_info "Board:            ${BOARD}"
+  fi
+  show_info "========================================"
+  printf "\n"
+}
+
 function copy_tools
 {(
   # Copy USB_DL, partition.xml and bootlogo
@@ -231,6 +275,9 @@ function pack_upgrade
   echo "STORAGE_TYPE=$STORAGE_TYPE"
   echo "CHIP=$CHIP"
   echo "BOARD=$BOARD"
+  if [ -f "$OUTPUT_DIR/firmware-version.txt" ]; then
+    cat "$OUTPUT_DIR/firmware-version.txt"
+  fi
   } >> "$TMPDIR"/misc_info.txt
 
   extra_files_args="$extra_files_args -f META $TMPDIR/misc_info.txt"
@@ -252,6 +299,10 @@ function pack_upgrade
   done
 
   python3 "$IMGTOOL_PATH"/mk_package.py "$FLASH_PARTITION_XML" "$OUTPUT_DIR" -o "$OUTPUT_DIR"/upgrade.zip $extra_files_args
+  if milkv_ota_enabled; then
+    python3 "$IMGTOOL_PATH"/mk_package.py "$FLASH_PARTITION_XML" "$OUTPUT_DIR" \
+      -o "$OUTPUT_DIR"/upgrade_ota.zip --ota $extra_files_args
+  fi
   command rm -rf "$TMPDIR"
 )}
 

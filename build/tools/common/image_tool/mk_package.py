@@ -41,7 +41,25 @@ def argparser():
         "all the files will add to utils folder.",
         action="append",
     )
+    parser.add_argument(
+        "--ota",
+        help="create a device-side OTA package: skip inactive A/B images and sparse CIMG zero chunks",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--skip-ab",
+        help="skip *_B images in A/B layouts",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--sparse-cimg",
+        help="rewrite all-zero CIMG chunks as DONT_CARE chunks in the zip entry",
+        action="store_true",
+    )
     args = parser.parse_args()
+    if args.ota:
+        args.skip_ab = True
+        args.sparse_cimg = True
     if args.verbose:
         logging.debug("Enable more verbose output")
         logging.getLogger().setLevel(level=logging.DEBUG)
@@ -163,18 +181,19 @@ def main():
             # Skip file size is equal to zero(Not exists)
             if p["file_size"] == 0:
                 continue
-            # A/B layouts: OTA only needs one boot/rootfs image; the inactive
-            # slot is flashed with that single copy. Including *_B doubles the
-            # package and can exhaust the DATA staging partition on device.
+            # A/B OTA only needs one boot/rootfs image; USB/factory packages
+            # must keep every partition listed in partition.xml.
             label = p.get("label", "")
-            if label in ("BOOT_B", "ROOTFS_B") or label.endswith("_B"):
+            if args.skip_ab and (label in ("BOOT_B", "ROOTFS_B") or label.endswith("_B")):
                 logging.info("Skip A/B inactive slot image in OTA package: %s" % label)
                 continue
             # Try pack header first to avoid user copy image without header
             if p["file_name"] != "fip.bin":
                 imgBuilder.packHeader(p)
 
-            zip_path = sparse_cimg_for_ota(p["file_path"], sparse_tmp)
+            zip_path = p["file_path"]
+            if args.sparse_cimg:
+                zip_path = sparse_cimg_for_ota(p["file_path"], sparse_tmp)
 
             # Add file to zipfile
             zipObj.write(zip_path, path.basename(p["file_path"]))

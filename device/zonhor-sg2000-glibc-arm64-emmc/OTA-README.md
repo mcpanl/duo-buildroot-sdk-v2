@@ -26,10 +26,11 @@
 
 ```bash
 ./build.sh zonhor-sg2000-glibc-arm64-emmc
-cd install/soc_sg2000_zonhor_sg2000_glibc_arm64_emmc
-# 必须包含 fip.bin、boot.emmc、boot_b.emmc、rootfs_ext4.emmc、rootfs_b_ext4.emmc
-tools/usb_dl/usb_dl -c 181x -s <os> -i .
+# Windows/USB 烧录请使用 out/zonhor-sg2000-glibc-arm64-emmc_<时间戳>.zip
+# 解压后必须包含 fip.bin、boot.emmc、boot_b.emmc、rootfs_ext4.emmc、rootfs_b_ext4.emmc
 ```
+
+不要使用 `out/zonhor-sg2000-glibc-arm64-emmc_ota_<时间戳>.zip` 做 USB 烧录；OTA 包会省略 B 槽镜像，并包含 `DONT_CARE` sparse chunk，当前 U-Boot USB 下载路径不保证支持。
 
 烧录后检查：
 
@@ -86,13 +87,17 @@ zonhor-ota: FLASH_ROOT  512.0/1500.0 MiB ( 34%) cur=18.2 MB/s avg=15.1 MB/s eta=
 ./build.sh zonhor-sg2000-glibc-arm64-emmc
 ```
 
-产物：`out/zonhor-sg2000-glibc-arm64-emmc_<时间戳>.zip`（`upgrade.zip` 格式，内含**单份** boot/rootfs，不含 BOOT_B/ROOTFS_B）。  
-OTA 包内的 CIMG 会在打包阶段把全零 chunk 转成 `DONT_CARE` sparse chunk；USB 工厂烧录使用的 install 镜像保持原始 CIMG 格式不变。
+产物：
+
+- `out/zonhor-sg2000-glibc-arm64-emmc_<时间戳>.zip`：USB 工厂/救砖烧录包，包含 A/B 两槽镜像，CIMG 保持 USB 兼容格式。
+- `out/zonhor-sg2000-glibc-arm64-emmc_ota_<时间戳>.zip`：板端 OTA 包，内含**单份** boot/rootfs，不含 BOOT_B/ROOTFS_B。
+
+OTA 包内的 CIMG 会在打包阶段把全零 chunk 转成 `DONT_CARE` sparse chunk；USB 工厂烧录包保持原始 CIMG 格式不变。
 
 ### 2. 上传到设备并触发
 
 ```bash
-scp out/zonhor-sg2000-glibc-arm64-emmc_*.zip root@<设备IP>:/mnt/data/upgrade.zip
+scp out/zonhor-sg2000-glibc-arm64-emmc_ota_*.zip root@<设备IP>:/mnt/data/upgrade.zip
 ssh root@<设备IP> "zonhor-ota-stage && sync && reboot"
 ```
 
