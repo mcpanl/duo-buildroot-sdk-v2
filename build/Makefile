@@ -639,6 +639,12 @@ br-rootfs-pack:
 	${Q}$(MAKE) -C $(BR_DIR) $(BR_DEFCONFIG) BR2_TOOLCHAIN_EXTERNAL_PATH=$(CROSS_COMPILE_PATH)
 	${Q}$(BR_DIR)/utils/brmake -j${NPROC} -C $(BR_DIR)
 	# ${Q}rm -rf $(BR_ROOTFS_DIR)/*
+ifneq ($(wildcard $(TOP_DIR)/device/$(MV_BOARD)/overlay/etc/init.d/S05ota),)
+	${Q}if [ -f $(BR_DIR)/output/$(BR_BOARD)/target/etc/zonhor-firmware-version ]; then \
+		cp -f $(BR_DIR)/output/$(BR_BOARD)/target/etc/zonhor-firmware-version \
+			$(OUTPUT_DIR)/firmware-version.txt; \
+	fi
+endif
 	${Q}rm -rf $(BR_MV_VENDOR_DIR)
 
 	# copy rootfs to rawimg dir
