@@ -8,14 +8,89 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <linux/i2c-dev.h>
 #include <poll.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #define PSY_PATH "/sys/class/power_supply/axp2101-battery"
 #define INPUT_BY_NAME "axp2101-pek"
+#define AXP2101_I2C_DEV "/dev/i2c-1"
+#define AXP2101_I2C_ADDR 0x34
+
+#define AXP2101_PWR_CTRL 0x80
+#define AXP2101_DCDC1_V_OUT 0x82
+#define AXP2101_DCDC2_V_OUT 0x83
+#define AXP2101_DCDC3_V_OUT 0x84
+#define AXP2101_DCDC4_V_OUT 0x85
+#define AXP2101_DCDC5_V_OUT 0x86
+#define AXP2101_LDO_ONOFF0 0x90
+#define AXP2101_LDO_ONOFF1 0x91
+#define AXP2101_ALDO1_V_OUT 0x92
+#define AXP2101_ALDO2_V_OUT 0x93
+#define AXP2101_ALDO3_V_OUT 0x94
+#define AXP2101_ALDO4_V_OUT 0x95
+#define AXP2101_BLDO1_V_OUT 0x96
+#define AXP2101_BLDO2_V_OUT 0x97
+#define AXP2101_CPUSLDO_V_OUT 0x98
+#define AXP2101_DLDO1_V_OUT 0x99
+#define AXP2101_DLDO2_V_OUT 0x9a
+
+#define BIT(n) (1U << (n))
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+
+enum axp2101_voltage_type {
+	AXP2101_VOLTAGE_LINEAR,
+	AXP2101_VOLTAGE_DCDC23,
+	AXP2101_VOLTAGE_DCDC4,
+};
+
+struct axp2101_output {
+	const char *name;
+	uint8_t enable_reg;
+	uint8_t enable_mask;
+	uint8_t voltage_reg;
+	uint8_t voltage_mask;
+	enum axp2101_voltage_type voltage_type;
+	int min_uv;
+	int max_uv;
+	int step_uv;
+};
+
+static const struct axp2101_output axp2101_outputs[] = {
+	{ "dcdc1", AXP2101_PWR_CTRL, BIT(0), AXP2101_DCDC1_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 1500000, 3400000, 100000 },
+	{ "dcdc2", AXP2101_PWR_CTRL, BIT(1), AXP2101_DCDC2_V_OUT, 0x7f,
+	  AXP2101_VOLTAGE_DCDC23, 0, 0, 0 },
+	{ "dcdc3", AXP2101_PWR_CTRL, BIT(2), AXP2101_DCDC3_V_OUT, 0x7f,
+	  AXP2101_VOLTAGE_DCDC23, 0, 0, 0 },
+	{ "dcdc4", AXP2101_PWR_CTRL, BIT(3), AXP2101_DCDC4_V_OUT, 0x7f,
+	  AXP2101_VOLTAGE_DCDC4, 0, 0, 0 },
+	{ "dcdc5", AXP2101_PWR_CTRL, BIT(4), AXP2101_DCDC5_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 1400000, 3700000, 100000 },
+	{ "aldo1", AXP2101_LDO_ONOFF0, BIT(0), AXP2101_ALDO1_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 500000, 3500000, 100000 },
+	{ "aldo2", AXP2101_LDO_ONOFF0, BIT(1), AXP2101_ALDO2_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 500000, 3500000, 100000 },
+	{ "aldo3", AXP2101_LDO_ONOFF0, BIT(2), AXP2101_ALDO3_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 500000, 3500000, 100000 },
+	{ "aldo4", AXP2101_LDO_ONOFF0, BIT(3), AXP2101_ALDO4_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 500000, 3500000, 100000 },
+	{ "bldo1", AXP2101_LDO_ONOFF0, BIT(4), AXP2101_BLDO1_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 500000, 3500000, 100000 },
+	{ "bldo2", AXP2101_LDO_ONOFF0, BIT(5), AXP2101_BLDO2_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 500000, 3500000, 100000 },
+	{ "cpusldo", AXP2101_LDO_ONOFF0, BIT(6), AXP2101_CPUSLDO_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 500000, 1400000, 50000 },
+	{ "dldo1", AXP2101_LDO_ONOFF0, BIT(7), AXP2101_DLDO1_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 500000, 3300000, 100000 },
+	{ "dldo2", AXP2101_LDO_ONOFF1, BIT(0), AXP2101_DLDO2_V_OUT, 0x1f,
+	  AXP2101_VOLTAGE_LINEAR, 500000, 1400000, 50000 },
+};
 
 static int read_sysfs_int(const char *path, int *out)
 {
@@ -66,6 +141,125 @@ static const char *status_to_str(int status)
 	}
 }
 
+static int axp2101_i2c_open(void)
+{
+	int fd;
+
+	fd = open(AXP2101_I2C_DEV, O_RDWR);
+	if (fd < 0)
+		return -1;
+
+	if (ioctl(fd, I2C_SLAVE, AXP2101_I2C_ADDR) < 0 &&
+	    ioctl(fd, I2C_SLAVE_FORCE, AXP2101_I2C_ADDR) < 0) {
+		close(fd);
+		return -1;
+	}
+
+	return fd;
+}
+
+static int axp2101_read_reg(int fd, uint8_t reg, uint8_t *val)
+{
+	if (write(fd, &reg, 1) != 1)
+		return -1;
+	if (read(fd, val, 1) != 1)
+		return -1;
+
+	return 0;
+}
+
+static int axp2101_linear_voltage_uv(const struct axp2101_output *out,
+				     uint8_t selector)
+{
+	int uv = out->min_uv + selector * out->step_uv;
+
+	if (uv > out->max_uv)
+		return -1;
+
+	return uv;
+}
+
+static int axp2101_dcdc23_voltage_uv(uint8_t selector)
+{
+	if (selector <= 0x46)
+		return 500000 + selector * 10000;
+	if (selector >= 0x47 && selector <= 0x57)
+		return 1220000 + (selector - 0x47) * 20000;
+
+	return -1;
+}
+
+static int axp2101_dcdc4_voltage_uv(uint8_t selector)
+{
+	if (selector <= 0x46)
+		return 500000 + selector * 10000;
+	if (selector >= 0x47 && selector <= 0x66)
+		return 1220000 + (selector - 0x47) * 20000;
+
+	return -1;
+}
+
+static int axp2101_output_voltage_uv(const struct axp2101_output *out,
+				     uint8_t raw)
+{
+	uint8_t selector = raw & out->voltage_mask;
+
+	switch (out->voltage_type) {
+	case AXP2101_VOLTAGE_LINEAR:
+		return axp2101_linear_voltage_uv(out, selector);
+	case AXP2101_VOLTAGE_DCDC23:
+		return axp2101_dcdc23_voltage_uv(selector);
+	case AXP2101_VOLTAGE_DCDC4:
+		return axp2101_dcdc4_voltage_uv(selector);
+	default:
+		return -1;
+	}
+}
+
+static int axp2101_print_outputs(void)
+{
+	int fd;
+	size_t i;
+
+	fd = axp2101_i2c_open();
+	if (fd < 0) {
+		printf("pmic_outputs: unavailable (%s)\n", strerror(errno));
+		return -1;
+	}
+
+	printf("pmic_outputs:\n");
+	for (i = 0; i < ARRAY_SIZE(axp2101_outputs); i++) {
+		const struct axp2101_output *out = &axp2101_outputs[i];
+		uint8_t enable_raw, voltage_raw, selector;
+		int uv;
+
+		if (axp2101_read_reg(fd, out->enable_reg, &enable_raw) ||
+		    axp2101_read_reg(fd, out->voltage_reg, &voltage_raw)) {
+			printf("  %-7s: read-failed (%s)\n",
+			       out->name, strerror(errno));
+			continue;
+		}
+
+		selector = voltage_raw & out->voltage_mask;
+		uv = axp2101_output_voltage_uv(out, voltage_raw);
+		if (uv < 0) {
+			printf("  %-7s: %-8s voltage=unknown raw=0x%02x\n",
+			       out->name,
+			       (enable_raw & out->enable_mask) ? "enabled" : "disabled",
+			       selector);
+			continue;
+		}
+
+		printf("  %-7s: %-8s voltage=%d uV (%.3f V) raw=0x%02x\n",
+		       out->name,
+		       (enable_raw & out->enable_mask) ? "enabled" : "disabled",
+		       uv, uv / 1000000.0, selector);
+	}
+
+	close(fd);
+	return 0;
+}
+
 static int cmd_status(void)
 {
 	char buf[64];
@@ -87,6 +281,7 @@ static int cmd_status(void)
 		printf("charge_current: %d uA (%.0f mA)\n", current, current / 1000.0);
 	if (!read_sysfs_int(PSY_PATH "/status", &status))
 		printf("status_code: %s\n", status_to_str(status));
+	axp2101_print_outputs();
 
 	return 0;
 }

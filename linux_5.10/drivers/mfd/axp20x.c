@@ -24,8 +24,10 @@
 #include <linux/module.h>
 #include <linux/of_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/reboot.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
+#include <linux/syscore_ops.h>
 
 #define AXP20X_OFF	BIT(7)
 
@@ -932,14 +934,80 @@ static const struct mfd_cell axp2101_cells[] = {
 };
 
 static struct axp20x_dev *axp20x_pm_power_off;
+
+/*
+ * AXP2101 system restart / power-off via REG10H.
+ * Called from syscore_shutdown after device_shutdown() while IRQs are
+ * still enabled, so I2C/regmap remains usable. On success the rails drop
+ * and we never return to RTC warm-reset / SoC soft paths.
+ */
+static void axp2101_do_restart(void)
+{
+	int ret;
+
+	if (!axp20x_pm_power_off ||
+	    axp20x_pm_power_off->variant != AXP2101_ID)
+		return;
+
+	dev_emerg(axp20x_pm_power_off->dev,
+		  "AXP2101 soft system restart (REG10H[1])\n");
+	ret = regmap_update_bits(axp20x_pm_power_off->regmap,
+				 AXP2101_COMM_CFG,
+				 AXP2101_SOFT_SYS_RESTART,
+				 AXP2101_SOFT_SYS_RESTART);
+	if (ret)
+		dev_emerg(axp20x_pm_power_off->dev,
+			  "AXP2101 restart write failed: %d\n", ret);
+
+	/* Rail power-cycle is not instant; wait for boards to go down. */
+	mdelay(1000);
+}
+
+static void axp2101_do_poweroff(void)
+{
+	int ret;
+
+	if (!axp20x_pm_power_off ||
+	    axp20x_pm_power_off->variant != AXP2101_ID)
+		return;
+
+	dev_emerg(axp20x_pm_power_off->dev,
+		  "AXP2101 soft power-off (REG10H[0])\n");
+	ret = regmap_update_bits(axp20x_pm_power_off->regmap,
+				 AXP2101_COMM_CFG,
+				 AXP2101_SOFT_PWROFF,
+				 AXP2101_SOFT_PWROFF);
+	if (ret)
+		dev_emerg(axp20x_pm_power_off->dev,
+			  "AXP2101 power-off write failed: %d\n", ret);
+
+	mdelay(1000);
+}
+
+static void axp2101_syscore_shutdown(void)
+{
+	if (!axp20x_pm_power_off ||
+	    axp20x_pm_power_off->variant != AXP2101_ID)
+		return;
+
+	if (system_state == SYSTEM_RESTART)
+		axp2101_do_restart();
+	else if (system_state == SYSTEM_POWER_OFF)
+		axp2101_do_poweroff();
+}
+
+static struct syscore_ops axp2101_syscore_ops = {
+	.shutdown = axp2101_syscore_shutdown,
+};
+
 static void axp20x_power_off(void)
 {
 	if (axp20x_pm_power_off->variant == AXP288_ID)
 		return;
 
 	if (axp20x_pm_power_off->variant == AXP2101_ID) {
-		regmap_update_bits(axp20x_pm_power_off->regmap, 0x10, BIT(0), BIT(0));
-		msleep(500);
+		/* Backup if syscore path did not cut power. */
+		axp2101_do_poweroff();
 		return;
 	}
 
@@ -1117,7 +1185,19 @@ int axp20x_device_probe(struct axp20x_dev *axp20x)
 		return ret;
 	}
 
-	if (!pm_power_off) {
+	/*
+	 * AXP2101 is the board PMIC: always own power-off / restart so the
+	 * CVITEK RTC warm-reset path cannot steal pm_power_off. Restart and
+	 * power-off are primarily driven from syscore_shutdown (I2C still
+	 * works); pm_power_off is a backup for the power-off path.
+	 */
+	if (axp20x->variant == AXP2101_ID) {
+		axp20x_pm_power_off = axp20x;
+		pm_power_off = axp20x_power_off;
+		register_syscore_ops(&axp2101_syscore_ops);
+		dev_info(axp20x->dev,
+			 "AXP2101 registered for system restart/power-off\n");
+	} else if (!pm_power_off) {
 		axp20x_pm_power_off = axp20x;
 		pm_power_off = axp20x_power_off;
 	}
@@ -1131,6 +1211,8 @@ EXPORT_SYMBOL(axp20x_device_probe);
 int axp20x_device_remove(struct axp20x_dev *axp20x)
 {
 	if (axp20x == axp20x_pm_power_off) {
+		if (axp20x->variant == AXP2101_ID)
+			unregister_syscore_ops(&axp2101_syscore_ops);
 		axp20x_pm_power_off = NULL;
 		pm_power_off = NULL;
 	}

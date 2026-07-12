@@ -90,11 +90,20 @@ static int cvi_reboot_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "cannot register restart handler (err=%d)\n",
 			err);
 		iounmap(base);
+		return err;
 	}
 
-	pm_power_off = &cvi_do_pwroff;
+	/*
+	 * Prefer an already-registered PMIC power-off handler (e.g. AXP2101).
+	 * RTC soft-shutdown is only a fallback when no PMIC owns the rail.
+	 */
+	if (!pm_power_off)
+		pm_power_off = &cvi_do_pwroff;
+	else
+		dev_info(&pdev->dev,
+			 "pm_power_off already set, keep existing handler\n");
 
-	return err;
+	return 0;
 }
 
 static const struct of_device_id cvi_reboot_of_match[] = {

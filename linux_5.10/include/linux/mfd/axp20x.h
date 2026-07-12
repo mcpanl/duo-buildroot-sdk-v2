@@ -180,6 +180,9 @@ enum axp20x_variants {
 #define AXP2101_PONP_IRQ_EN		BIT(0)
 #define AXP2101_PONN_IRQ_EN		BIT(1)
 #define AXP2101_BTN_PWROFF_EN		BIT(1)
+/* REG10H (AXP2101_COMM_CFG) */
+#define AXP2101_SOFT_PWROFF		BIT(0)	/* soft power-off */
+#define AXP2101_SOFT_SYS_RESTART	BIT(1)	/* POWOFF/POWON system restart */
 
 #define AXP2101_IRQ0_EN			0x40
 #define AXP2101_IRQ1_EN			0x41
