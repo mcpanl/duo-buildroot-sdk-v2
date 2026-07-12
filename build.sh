@@ -3,6 +3,8 @@
 TOP_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 cd ${TOP_DIR}
 
+MILKV_ACTION="all"
+
 function show_info()
 {
   printf "\e[1;32m%s\e[0m\n" "$1"
@@ -13,26 +15,33 @@ function show_err()
   printf "\e[1;31mError: %s\e[0m\n" "$1"
 }
 
-function milkv_build()
+function milkv_clean_stale_images()
 {
-  # clean old img
-  old_image_count=`ls ${OUTPUT_DIR}/*.img* | wc -l`
-  if [ ${old_image_count} -ge 0 ]; then
-    pushd ${OUTPUT_DIR}
-    rm -rf *.img*
-    popd
+  if [ ! -d "${OUTPUT_DIR}" ]; then
+    return 0
   fi
 
-  # clean emmc/nor/nand img
-  if [ -f "${OUTPUT_DIR}/upgrade.zip" ]; then
-    rm -rf ${OUTPUT_DIR}/*
-  fi
-   
-  clean_all
-  build_all
+  pushd "${OUTPUT_DIR}" > /dev/null || return 0
+  rm -f *.img* upgrade.zip 2>/dev/null
+  popd > /dev/null
+}
+
+function milkv_pack_and_report()
+{
+  milkv_pack
   if [ $? -eq 0 ]; then
     show_info "Build board ${MILKV_BOARD} success!"
   else
+    show_err "Build board ${MILKV_BOARD} failed!"
+    exit 1
+  fi
+}
+
+function milkv_build()
+{
+  milkv_clean_stale_images
+  build_all
+  if [ $? -ne 0 ]; then
     show_err "Build board ${MILKV_BOARD} failed!"
     exit 1
   fi
@@ -130,32 +139,113 @@ function get_toolchain()
   fi
 }
 
+function milkv_is_valid_action()
+{
+  case "$1" in
+    all|clean|distclean|kernel|uboot|rootfs|middleware|osdrv|pack)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 function build_usage()
 {
   echo "Usage:"
-  echo "${BASH_SOURCE[0]}              - Show this menu"
-  echo "${BASH_SOURCE[0]} lunch        - Select a board to build"
-  echo "${BASH_SOURCE[0]} zonhor       - Build zonhor-sg2000-glibc-arm64-emmc"
-  echo "${BASH_SOURCE[0]} [board]      - Build [board] directly, supported boards as follows:"
+  echo "${BASH_SOURCE[0]}                          - Show this menu"
+  echo "${BASH_SOURCE[0]} lunch                    - Select a board to build"
+  echo "${BASH_SOURCE[0]} [board]                  - Incremental full build (default)"
+  echo "${BASH_SOURCE[0]} [board] all               - Same as incremental full build"
+  echo "${BASH_SOURCE[0]} [board] clean             - Clean build artifacts only"
+  echo "${BASH_SOURCE[0]} [board] distclean         - Deep clean build artifacts"
+  echo "${BASH_SOURCE[0]} [board] kernel            - Build kernel and pack image"
+  echo "${BASH_SOURCE[0]} [board] uboot             - Build u-boot and pack image"
+  echo "${BASH_SOURCE[0]} [board] rootfs            - Build rootfs and pack image"
+  echo "${BASH_SOURCE[0]} [board] middleware        - Build middleware only"
+  echo "${BASH_SOURCE[0]} [board] osdrv             - Build osdrv only"
+  echo "${BASH_SOURCE[0]} [board] pack              - Repack image only"
+  echo ""
+  echo "Notes:"
+  echo "  Default build is incremental. Run 'clean' or 'distclean' after toolchain,"
+  echo "  defconfig, or partition changes."
+  echo ""
+  echo "${BASH_SOURCE[0]} zonhor                     - Build zonhor-sg2000-glibc-arm64-emmc"
+  echo "Supported boards:"
   list_boards
+}
+
+function milkv_run_action()
+{
+  local action="${1:-all}"
+
+  if ! milkv_is_valid_action "${action}"; then
+    show_err "Unknown action: ${action}"
+    build_usage
+    exit 1
+  fi
+
+  case "${action}" in
+    all)
+      milkv_build
+      milkv_pack_and_report
+      ;;
+    clean)
+      clean_all
+      show_info "Clean board ${MILKV_BOARD} success!"
+      ;;
+    distclean)
+      distclean_all
+      show_info "Distclean board ${MILKV_BOARD} success!"
+      ;;
+    kernel)
+      build_kernel || exit 1
+      pack_upgrade || exit 1
+      milkv_pack_and_report
+      ;;
+    uboot)
+      build_uboot || exit 1
+      pack_upgrade || exit 1
+      milkv_pack_and_report
+      ;;
+    rootfs)
+      pack_rootfs || exit 1
+      pack_upgrade || exit 1
+      milkv_pack_and_report
+      ;;
+    middleware)
+      build_middleware || exit 1
+      show_info "Build middleware for ${MILKV_BOARD} success!"
+      ;;
+    osdrv)
+      build_osdrv || exit 1
+      show_info "Build osdrv for ${MILKV_BOARD} success!"
+      ;;
+    pack)
+      pack_upgrade || exit 1
+      milkv_pack_and_report
+      ;;
+  esac
 }
 
 if [ $# -ge 1 ]; then
   if [ "$1" = "lunch" ]; then
     source ${TOP_DIR}/build/envsetup_milkv.sh lunch || exit 1
   else
-    if [ "$1" = "zonhor" ] || [ "$1" = "zonhor-sg2000" ]; then
-      set -- "zonhor-sg2000-glibc-arm64-emmc"
+    MILKV_BOARD_ARG="$1"
+    if [ "$MILKV_BOARD_ARG" = "zonhor" ] || [ "$MILKV_BOARD_ARG" = "zonhor-sg2000" ]; then
+      MILKV_BOARD_ARG="zonhor-sg2000-glibc-arm64-emmc"
+    fi
+    if [ $# -ge 2 ]; then
+      MILKV_ACTION="$2"
     fi
     source ${TOP_DIR}/build/envsetup_milkv.sh "list" || exit 1
-    if [[ ${MILKV_BOARD_ARRAY[@]} =~ (^|[[:space:]])"${1}"($|[[:space:]]) ]]; then
-      #MILKV_BOARD=${1}
-      #echo "$MILKV_BOARD"
-      #source ${TOP_DIR}/build/envsetup_milkv.sh "${1}"
-      check_board ${1} || exit $?
+    if [[ ${MILKV_BOARD_ARRAY[@]} =~ (^|[[:space:]])"${MILKV_BOARD_ARG}"($|[[:space:]]) ]]; then
+      check_board ${MILKV_BOARD_ARG} || exit $?
       build_info || exit $?
     else
-      show_err "${1} not supported!"
+      show_err "${MILKV_BOARD_ARG} not supported!"
       echo "Available boards:"
       list_boards
       exit $?
@@ -168,5 +258,4 @@ fi
 
 get_toolchain
 
-milkv_build
-milkv_pack
+milkv_run_action "${MILKV_ACTION}"
