@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/pm.h>
 #include <linux/power_supply.h>
 #include <linux/regmap.h>
 #include <linux/mfd/axp20x.h>
@@ -272,6 +273,9 @@ static int axp2101_battery_probe(struct platform_device *pdev)
 
 	batt->regmap = axp20x->regmap;
 	batt->dev = &pdev->dev;
+	batt->irq_chgdn = -1;
+	batt->irq_vinsert = -1;
+	batt->irq_vremove = -1;
 
 	ret = regmap_update_bits(batt->regmap, AXP2101_MODULE_EN,
 				 AXP2101_GAUGE_EN | AXP2101_CHG_EN,
@@ -339,6 +343,44 @@ static int axp2101_battery_probe(struct platform_device *pdev)
 	return 0;
 }
 
+/*
+ * Charger / VBUS IRQs must not stay armed across freeze/s2idle: USB suspend
+ * commonly glitches VIN and immediately wakes the system (seen as
+ * axp20x-i2c "Failed to read IRQ status: -108" after I2C late-suspend).
+ * Power-key wake remains handled by axp2101-pek.
+ */
+static int __maybe_unused axp2101_battery_suspend(struct device *dev)
+{
+	struct axp2101_batt *batt = dev_get_drvdata(dev);
+
+	if (batt->irq_chgdn >= 0)
+		disable_irq(batt->irq_chgdn);
+	if (batt->irq_vinsert >= 0)
+		disable_irq(batt->irq_vinsert);
+	if (batt->irq_vremove >= 0)
+		disable_irq(batt->irq_vremove);
+
+	return 0;
+}
+
+static int __maybe_unused axp2101_battery_resume(struct device *dev)
+{
+	struct axp2101_batt *batt = dev_get_drvdata(dev);
+
+	if (batt->irq_chgdn >= 0)
+		enable_irq(batt->irq_chgdn);
+	if (batt->irq_vinsert >= 0)
+		enable_irq(batt->irq_vinsert);
+	if (batt->irq_vremove >= 0)
+		enable_irq(batt->irq_vremove);
+
+	return 0;
+}
+
+static const struct dev_pm_ops axp2101_battery_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(axp2101_battery_suspend, axp2101_battery_resume)
+};
+
 static const struct of_device_id axp2101_battery_of_match[] = {
 	{ .compatible = "x-powers,axp2101-battery-power-supply" },
 	{ }
@@ -350,6 +392,7 @@ static struct platform_driver axp2101_battery_driver = {
 	.driver = {
 		.name = "axp2101-battery-power-supply",
 		.of_match_table = axp2101_battery_of_match,
+		.pm = &axp2101_battery_pm_ops,
 	},
 };
 module_platform_driver(axp2101_battery_driver);

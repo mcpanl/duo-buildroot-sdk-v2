@@ -16,11 +16,71 @@
 #include <linux/acpi.h>
 #include <linux/err.h>
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/mfd/axp20x.h>
 #include <linux/of.h>
+#include <linux/pm.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
+
+#define AXP2101_IRQ_STATUS0	0x48
+
+/*
+ * Before I2C late-suspend, clear latched AXP2101 IRQ status so INT# is not
+ * left asserted into freeze/s2idle (handler would then hit -ESHUTDOWN).
+ */
+static int axp20x_i2c_suspend(struct device *dev)
+{
+	struct axp20x_dev *axp20x = dev_get_drvdata(dev);
+	unsigned int status;
+	int ret;
+	int i;
+
+	if (!axp20x || axp20x->variant != AXP2101_ID)
+		return 0;
+
+	for (i = 0; i < 3; i++) {
+		if (regmap_read(axp20x->regmap, AXP2101_IRQ_STATUS0 + i, &status))
+			continue;
+		if (status)
+			regmap_write(axp20x->regmap, AXP2101_IRQ_STATUS0 + i,
+				     status);
+	}
+
+	if (device_may_wakeup(dev) && axp20x->irq > 0) {
+		ret = enable_irq_wake(axp20x->irq);
+		if (ret)
+			dev_warn(dev, "failed to enable AXP2101 wake IRQ %d: %d\n",
+				 axp20x->irq, ret);
+
+		/*
+		 * Keep the IRQ line armed as a wake source, but stop the normal
+		 * regmap-irq thread before I2C is suspended. Otherwise a late
+		 * AXP INT# can try to read IRQ status after the adapter is down.
+		 */
+		disable_irq(axp20x->irq);
+	}
+
+	return 0;
+}
+
+static int axp20x_i2c_resume(struct device *dev)
+{
+	struct axp20x_dev *axp20x = dev_get_drvdata(dev);
+
+	if (axp20x && axp20x->variant == AXP2101_ID &&
+	    device_may_wakeup(dev) && axp20x->irq > 0) {
+		enable_irq(axp20x->irq);
+		disable_irq_wake(axp20x->irq);
+	}
+
+	return 0;
+}
+
+static const struct dev_pm_ops axp20x_i2c_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(axp20x_i2c_suspend, axp20x_i2c_resume)
+};
 
 static int axp20x_i2c_probe(struct i2c_client *i2c,
 			    const struct i2c_device_id *id)
@@ -46,6 +106,10 @@ static int axp20x_i2c_probe(struct i2c_client *i2c,
 		dev_err(&i2c->dev, "regmap init failed: %d\n", ret);
 		return ret;
 	}
+
+	device_init_wakeup(&i2c->dev,
+			   of_property_read_bool(i2c->dev.of_node,
+						 "wakeup-source"));
 
 	return axp20x_device_probe(axp20x);
 }
@@ -99,6 +163,7 @@ static struct i2c_driver axp20x_i2c_driver = {
 		.name	= "axp20x-i2c",
 		.of_match_table	= of_match_ptr(axp20x_i2c_of_match),
 		.acpi_match_table = ACPI_PTR(axp20x_i2c_acpi_match),
+		.pm	= &axp20x_i2c_pm_ops,
 	},
 	.probe		= axp20x_i2c_probe,
 	.remove		= axp20x_i2c_remove,
