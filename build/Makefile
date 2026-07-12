@@ -604,6 +604,11 @@ endif
 ifneq ($(wildcard $(TOP_DIR)/device/$(MV_BOARD)/overlay),)
 	${Q}cp -arf $(TOP_DIR)/device/$(MV_BOARD)/overlay/* $(BR_ROOTFS_DIR)/
 endif
+ifneq ($(wildcard $(TOP_DIR)/device/$(MV_BOARD)/post-build.sh),)
+	${Q}mkdir -p $(BR_OVERLAY_DIR)/..
+	${Q}cp -f $(TOP_DIR)/device/$(MV_BOARD)/post-build.sh $(BR_OVERLAY_DIR)/../post-build.sh
+	${Q}chmod +x $(BR_OVERLAY_DIR)/../post-build.sh
+endif
 
 	# clean this directory for multiple targets
 	${Q}rm -rf $(BR_OVERLAY_DIR)
