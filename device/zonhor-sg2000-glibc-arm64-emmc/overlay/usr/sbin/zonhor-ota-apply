@@ -1,34 +1,36 @@
 #!/bin/sh
 #
-# Apply a staged upgrade.zip to the inactive A/B slot.
+# Apply a staged OTA to the inactive A/B slot.
+#
+# Prefer pre-unpacked images from zonhor-ota-stage ($OTA_WORK). Falls back to
+# unpacking upgrade.zip here for older pending markers.
 #
 
 . /usr/sbin/zonhor-ota-common.sh
 
-OTA_FILE="$DATA_MNT/upgrade.zip"
-OTA_PENDING="$DATA_MNT/upgrade.pending"
-OTA_WORK="$DATA_MNT/work"
-OTA_LOG="$DATA_MNT/upgrade.log"
-OTA_FAIL="$DATA_MNT/upgrade.failed"
-
 log() {
+	# Serial console + upgrade.log + dmesg (/dev/kmsg).
 	echo "$(date '+%F %T') $*" | tee -a "$OTA_LOG"
+	ota_kmsg_only "$*"
 }
 
 fail() {
 	log "ERROR: $*"
+	ota_ui_error "$*"
 	ota_led_error
 	touch "$OTA_FAIL" 2>/dev/null
 	rm -f "$OTA_PENDING"
 	sync 2>/dev/null
+	# Keep FAILED on screen briefly, then stop daemon.
+	sleep 2
+	ota_ui_stop
 	exit "${2:-1}"
 }
 
-trap 'log "interrupted"; ota_led_stop; exit 130' INT TERM
+trap 'log "interrupted"; ota_ui_stop; ota_led_stop; exit 130' INT TERM
 
 data_mount || fail "cannot mount $DATA_MNT"
 
-[ -f "$OTA_FILE" ] || fail "missing $OTA_FILE"
 [ -f "$OTA_PENDING" ] || fail "missing $OTA_PENDING (run zonhor-ota-stage first)"
 
 if ! command -v zonhor-ab-slot >/dev/null 2>&1; then
@@ -39,57 +41,86 @@ TARGET_SLOT=$(zonhor-ab-slot get-inactive) || fail "cannot determine inactive sl
 ACTIVE_SLOT=$(zonhor-ab-slot get-active) || fail "cannot determine active slot"
 
 rm -f "$OTA_FAIL"
-: >"$OTA_LOG"
+# Keep prior stage log; append apply phase.
+[ -f "$OTA_LOG" ] || : >"$OTA_LOG"
 
 log "OTA apply starting: active=$ACTIVE_SLOT target=$TARGET_SLOT"
 ota_led_start phase1
+ota_ui_start "$ACTIVE_SLOT" "$TARGET_SLOT"
+ota_ui_update CHECK 3 "prepare"
 
-rm -rf "$OTA_WORK"
-mkdir -p "$OTA_WORK"
-
-log "checking package metadata"
-unzip -q -d "$OTA_WORK" "$OTA_FILE" META/misc_info.txt || fail "META/misc_info.txt missing"
-# shellcheck disable=SC1090
-. "$OTA_WORK/META/misc_info.txt"
-[ "$STORAGE_TYPE" = "emmc" ] || fail "package STORAGE_TYPE=$STORAGE_TYPE, expected emmc"
-
-log "unpacking $OTA_FILE"
-unzip -o "$OTA_FILE" -d "$OTA_WORK" || fail "unzip failed"
-
-METADATA="$OTA_WORK/META/metadata.txt"
-[ -f "$METADATA" ] || fail "missing $METADATA"
-chmod +x "$OTA_WORK/utils/cimg2raw" 2>/dev/null
-
-log "verifying image checksums"
-cd "$OTA_WORK" || fail "cannot enter $OTA_WORK"
-md5sum -c META/metadata.txt >>"$OTA_LOG" 2>&1 || fail "checksum verification failed"
-
-[ -f boot.emmc ] || fail "boot.emmc missing"
-[ -f rootfs_ext4.emmc ] || fail "rootfs_ext4.emmc missing"
-
-ota_cimg2raw boot.emmc || fail "cannot unpack boot image"
-ota_cimg2raw rootfs_ext4.emmc || fail "cannot unpack rootfs image"
-if [ -f logo.jpg ]; then
-	ota_cimg2raw logo.jpg || fail "cannot unpack logo image"
+if ota_work_ready; then
+	boot_sz=$(wc -c <"$OTA_WORK/boot.emmc" 2>/dev/null || echo 0)
+	root_sz=$(wc -c <"$OTA_WORK/rootfs_ext4.emmc" 2>/dev/null || echo 0)
+	log "using pre-unpacked images in $OTA_WORK (boot=${boot_sz}B rootfs=${root_sz}B)"
+	ota_ui_update CHECK 35 "ready"
+else
+	# Compat: pending from an older stage that only dropped the zip.
+	[ -f "$OTA_FILE" ] || fail "missing $OTA_FILE and work not ready"
+	log "work not ready; unpacking $OTA_FILE now (slow path)"
+	ota_prepare_work || fail "prepare failed (see $OTA_LOG)"
+	ota_work_ready || fail "prepare finished but work still invalid"
 fi
 
-log "flashing inactive slot $TARGET_SLOT (boot + rootfs)"
-zonhor-ab-slot flash-boot "$TARGET_SLOT" boot.emmc >>"$OTA_LOG" 2>&1 || fail "boot flash failed"
-zonhor-ab-slot flash-rootfs "$TARGET_SLOT" rootfs_ext4.emmc >>"$OTA_LOG" 2>&1 || fail "rootfs flash failed"
+cd "$OTA_WORK" || fail "cannot enter $OTA_WORK"
+
+BOOT_DEV=$(ota_slot_boot_dev "$TARGET_SLOT") || fail "bad boot slot"
+ROOT_DEV=$(ota_slot_root_dev "$TARGET_SLOT") || fail "bad root slot"
+
+log "flash plan: slot $ACTIVE_SLOT -> $TARGET_SLOT"
+log "  BOOT   $BOOT_DEV  <- boot.emmc"
+log "  ROOTFS $ROOT_DEV  <- rootfs_ext4.emmc"
+[ -f logo.jpg ] && log "  MISC   /dev/mmcblk0p3 <- logo.jpg"
+
+log "flashing inactive slot $TARGET_SLOT BOOT"
+ota_flash_image boot.emmc "$BOOT_DEV" FLASH_BOOT 35 45 \
+	|| fail "boot flash failed"
+
+log "flashing inactive slot $TARGET_SLOT ROOTFS (largest step)"
+ota_flash_image rootfs_ext4.emmc "$ROOT_DEV" FLASH_ROOT 45 95 \
+	|| fail "rootfs flash failed"
+
+log "verifying ext4 magic on $ROOT_DEV"
+if ! ota_verify_ext4_image "$ROOT_DEV"; then
+	fail "flashed $ROOT_DEV failed ext4 magic check"
+fi
+log "verified ext4 magic on $ROOT_DEV OK"
 
 if [ -f logo.jpg ]; then
 	log "flashing shared MISC/logo"
-	zonhor-ab-slot flash-misc logo.jpg >>"$OTA_LOG" 2>&1 || fail "misc flash failed"
+	ota_flash_image logo.jpg /dev/mmcblk0p3 FLASH_MISC 95 97 \
+		|| fail "misc flash failed"
 fi
 
 log "switching boot slot to $TARGET_SLOT"
+ota_ui_update SWITCH 98 "boot_slot"
 zonhor-ab-slot set-boot-slot "$TARGET_SLOT" >>"$OTA_LOG" 2>&1 || fail "slot switch failed"
+log "boot_slot now $(fw_printenv -n boot_slot 2>/dev/null || echo '?')"
+ota_ui_update SWITCH 99 "cleanup"
 
+log "cleanup: removing pending/work, keeping zip as upgrade.last.zip"
 rm -f "$OTA_PENDING"
+rm -rf "$OTA_WORK"
 [ -f "$OTA_FILE" ] && mv -f "$OTA_FILE" "$DATA_MNT/upgrade.last.zip" 2>/dev/null
 sync
+# Extra flush of eMMC before warm reboot; soft reset after large writes
+# has been observed to hang at "Starting kernel" until a power cycle.
+if [ -b /dev/mmcblk0 ]; then
+	log "final blockdev --flushbufs /dev/mmcblk0"
+	blockdev --flushbufs /dev/mmcblk0 2>/dev/null || true
+fi
+sync
+sleep 1
 
 log "OTA apply complete, rebooting into slot $TARGET_SLOT"
 ota_led_stop
 ota_led_success
+ota_ui_success
+# Hold SUCCESS screen (~3s total with ota_ui_success sleep).
+sleep 2
+ota_ui_stop
+# Prefer orderly reboot over reboot -f so drivers can quiesce eMMC/USB.
+reboot
+# Fallback if reboot returns without restarting.
+sleep 5
 reboot -f

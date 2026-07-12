@@ -12,11 +12,19 @@ start)
 		exit 0
 	}
 
-	if [ -f "$DATA_MNT/upgrade.pending" ] && [ -f "$DATA_MNT/upgrade.zip" ]; then
+	if [ ! -f "$OTA_PENDING" ]; then
+		exit 0
+	fi
+
+	# New stage: work already unpacked. Old stage: only zip present.
+	if ota_work_ready || [ -f "$OTA_FILE" ]; then
 		echo "S05ota: pending upgrade detected, applying..."
 		/usr/sbin/zonhor-ota-apply
 		exit $?
 	fi
+
+	echo "S05ota: pending marker without work/zip, clearing"
+	rm -f "$OTA_PENDING"
 	;;
 stop)
 	;;
