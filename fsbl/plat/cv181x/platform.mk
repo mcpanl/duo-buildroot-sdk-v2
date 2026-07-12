@@ -62,6 +62,7 @@ DECOMPRESSION_SOURCES = \
 
 BL2_SRCS = \
 	${BL_COMMON_SOURCES} \
+	plat/${CHIP_ARCH}/axp2101_early.c \
 	plat/${CHIP_ARCH}/bl2/bl2_opt.c \
 	plat/${CHIP_ARCH}/emmc/emmc.c \
 	plat/${CHIP_ARCH}/emmc/cv_emmc.c \

@@ -6,6 +6,9 @@
 #include <delay_timer.h>
 #include <rom_api.h>
 #include <cpu.h>
+
+int axp2101_early_dcdc4_enable(void);
+
 enum CHIP_CLK_MODE chip_clk_mode = CLK_ND;
 #ifdef RTOS_ENABLE_FREERTOS
 int init_comm_info(int ret)
@@ -74,6 +77,8 @@ void bl2_main(void)
 	switch_rtc_mode_1st_stage();
 
 	set_rtc_en_registers();
+
+	axp2101_early_dcdc4_enable();
 
 #ifdef OD_CLK_SEL
 	chip_clk_mode = CLK_OD;
