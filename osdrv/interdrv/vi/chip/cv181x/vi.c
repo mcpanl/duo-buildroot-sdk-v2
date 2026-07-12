@@ -3045,9 +3045,8 @@ int vi_start_streaming(struct cvi_vi_dev *vdev)
 		if (!ctx->isp_pipe_cfg[ISP_PRERAW_A].is_offline_preraw)
 			_vi_pre_fe_ctrl_setup(raw_num, vdev);
 		if (!ctx->is_multi_sensor) { //only single sensor maybe break
-			if (_is_all_online(ctx) ||
-				(_is_fe_be_online(ctx) && ctx->is_slice_buf_on)) {
-				vi_pr(VI_INFO, "on-the-fly mode or slice_buffer is on\n");
+			if (_is_all_online(ctx) || _is_fe_be_online(ctx)) {
+				vi_pr(VI_INFO, "on-the-fly/fe_be mode, defer isp_pre_trig\n");
 				break;
 			}
 		}
@@ -3172,6 +3171,40 @@ int vi_start_streaming(struct cvi_vi_dev *vdev)
 				atomic_set(&vdev->pre_be_state[ISP_BE_CH0], ISP_PRE_BE_RUNNING);
 			}
 			kfree(post_para);
+		}
+	} else if (_is_fe_be_online(ctx) && !ctx->is_slice_buf_on) {
+		raw_num = ISP_PRERAW_A;
+
+		if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler) { //offline mode
+			_postraw_outbuf_enq(vdev, raw_num);
+		} else { //online mode
+			struct sc_cfg_cb *post_para = kzalloc(sizeof(struct sc_cfg_cb), GFP_KERNEL);
+
+			if (!post_para) {
+				vi_pr(VI_ERR, "fail to kzalloc(%zu)\n", sizeof(struct sc_cfg_cb));
+				return CVI_FAILURE;
+			}
+			/* VI Online VPSS sc cb trigger */
+			post_para->snr_num = raw_num;
+			post_para->is_tile = false;
+			post_para->bypass_num = gViCtx->bypass_frm[raw_num];
+			if (_vi_call_cb(E_MODULE_VPSS, VPSS_CB_VI_ONLINE_TRIGGER, post_para) != 0) {
+				vi_pr(VI_INFO, "sc is not ready. try later\n");
+			} else {
+				atomic_set(&vdev->ol_sc_frm_done, 0);
+			}
+			kfree(post_para);
+		}
+
+		if (!ctx->isp_pipe_cfg[raw_num].is_offline_preraw) {
+			if (!ctx->isp_pipe_cfg[raw_num].is_yuv_bypass_path) { //RGB sensor
+				_set_init_state(vdev, raw_num, ISP_FE_CH0);
+				isp_pre_trig(ctx, raw_num, ISP_FE_CH0);
+				if (ctx->isp_pipe_cfg[raw_num].is_hdr_on) {
+					_set_init_state(vdev, raw_num, ISP_FE_CH1);
+					isp_pre_trig(ctx, raw_num, ISP_FE_CH1);
+				}
+			}
 		}
 	}
 
