@@ -1,0 +1,94 @@
+#!/bin/sh
+#
+# Derive deterministic locally-administered MAC from chip UID and apply it.
+# eth0: 02 + last 5 UID bytes; wlan0: 06 + same suffix (never collides with eth0).
+#
+
+SYS_KO=/mnt/system/ko/cv181x_sys.ko
+BASE_KO=/mnt/system/ko/cv181x_base.ko
+UID_SYSFS=/sys/class/cvi-base/base_uid
+IFACE_WAIT_MAX=30
+
+load_base_modules() {
+	if ! lsmod | grep -q '^cv181x_sys '; then
+		[ -f "$SYS_KO" ] || return 1
+		insmod "$SYS_KO" || return 1
+	fi
+	if ! lsmod | grep -q '^cv181x_base '; then
+		[ -f "$BASE_KO" ] || return 1
+		insmod "$BASE_KO" || return 1
+	fi
+	[ -r "$UID_SYSFS" ]
+}
+
+derive_mac() {
+	iface=$1
+	uid_hex=$(sed -e 's/^UID: //' -e 's/_//' "$UID_SYSFS")
+	suffix=$(echo "$uid_hex" | cut -c7-16)
+	[ "${#suffix}" -eq 10 ] || return 1
+
+	b1=$(echo "$suffix" | cut -c1-2)
+	b2=$(echo "$suffix" | cut -c3-4)
+	b3=$(echo "$suffix" | cut -c5-6)
+	b4=$(echo "$suffix" | cut -c7-8)
+	b5=$(echo "$suffix" | cut -c9-10)
+
+	case "$iface" in
+	eth0)
+		prefix=02
+		;;
+	wlan0)
+		prefix=06
+		;;
+	*)
+		return 1
+		;;
+	esac
+
+	printf '%s:%s:%s:%s:%s:%s\n' "$prefix" "$b1" "$b2" "$b3" "$b4" "$b5"
+}
+
+wait_for_iface() {
+	iface=$1
+	i=0
+	while [ "$i" -lt "$IFACE_WAIT_MAX" ]; do
+		[ -d "/sys/class/net/$iface" ] && return 0
+		sleep 0.2
+		i=$((i + 1))
+	done
+	return 1
+}
+
+set_iface_mac() {
+	iface=$1
+	mac=$2
+
+	wait_for_iface "$iface" || {
+		echo "zonhor-mac-from-uid: interface $iface not found" >&2
+		return 1
+	}
+
+	ip link set "$iface" down 2>/dev/null
+	ip link set "$iface" address "$mac" || return 1
+	ip link set "$iface" up 2>/dev/null
+	echo "zonhor-mac-from-uid: set $iface address to $mac" >&2
+}
+
+main() {
+	iface="${1:-eth0}"
+
+	load_base_modules || {
+		echo "zonhor-mac-from-uid: failed to load base modules" >&2
+		return 1
+	}
+
+	mac=$(derive_mac "$iface") || {
+		echo "zonhor-mac-from-uid: failed to derive MAC for $iface" >&2
+		return 1
+	}
+
+	set_iface_mac "$iface" "$mac" || return 1
+	printf '%s\n' "$mac"
+}
+
+main "$@"
