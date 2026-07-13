@@ -13,11 +13,15 @@ extern "C" {
 
 static const IMX678_MODE_S g_astImx678_mode[IMX678_MODE_NUM] = {
 	[IMX678_MODE_8M30] = {
-		.name = "8M30",
+		.name = "5M30",
 		.astImg[0] = {
-			/* PIX_HWIDTH/VWIDTH: 0x303E/0x303F=0x0F10, 0x3046/0x3047=0x0884 */
+			/*
+			 * 4K sensor readout + center crop 2880x1620 for SG2000 5MP ISP limit.
+			 * MIPI frame stays 3856x2180; ISP extracts via stWndRect (same as 1080p).
+			 * PIX crop: HST=488, HWIDTH=2880, VST=280, VWIDTH=1620.
+			 */
 			.stSnsSize = { .u32Width = 3856, .u32Height = 2180 },
-			.stWndRect = { .s32X = 0, .s32Y = 0, .u32Width = 3840, .u32Height = 2160 },
+			.stWndRect = { .s32X = 488, .s32Y = 280, .u32Width = 2880, .u32Height = 1620 },
 			.stMaxSize = { .u32Width = 3856, .u32Height = 2180 },
 		},
 		.f32MaxFps = 30,

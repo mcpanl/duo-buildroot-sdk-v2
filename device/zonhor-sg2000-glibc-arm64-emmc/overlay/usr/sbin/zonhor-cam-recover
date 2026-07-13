@@ -1,0 +1,67 @@
+#!/bin/sh
+# Reload CVITEK camera stack after VPSS/VI kernel Oops or stuck I2C.
+# Usage: zonhor-cam-recover [reload|i2c-test]
+
+I2C_BUS=3
+I2C_ADDR=0x1a
+CHIP_ID_REG=0x3022
+
+die() {
+	echo "zonhor-cam-recover: $*" >&2
+	exit 1
+}
+
+kill_camera_apps() {
+	killall sample_sensor_lcd sample_sensor_test sample_vio 2>/dev/null || true
+	sleep 0.2
+}
+
+reload_camera_ko() {
+	local m
+
+	kill_camera_apps
+
+	for m in cv181x_ive cvi_vc_driver cv181x_jpeg cv181x_vcodec cv181x_rgn \
+		cv181x_mipi_tx cv181x_vo cv181x_dwa cv181x_vpss cv181x_vi snsr_i2c cvi_mipi_rx; do
+		rmmod "$m" 2>/dev/null || true
+	done
+
+	if [ ! -x /mnt/system/ko/loadsystemko.sh ]; then
+		die "missing /mnt/system/ko/loadsystemko.sh"
+	fi
+
+	/mnt/system/ko/loadsystemko.sh || die "loadsystemko.sh failed"
+	sleep 2
+	echo "Camera kernel modules reloaded."
+}
+
+i2c_test() {
+	if ! command -v i2ctransfer >/dev/null 2>&1; then
+		die "i2ctransfer not installed"
+	fi
+	if [ ! -c "/dev/i2c-${I2C_BUS}" ]; then
+		die "/dev/i2c-${I2C_BUS} missing"
+	fi
+
+	echo "Probing IMX678 on i2c-${I2C_BUS} addr ${I2C_ADDR} reg 0x${CHIP_ID_REG} ..."
+	val=$(i2ctransfer -y "${I2C_BUS}" w2@"${I2C_ADDR}" \
+		$((CHIP_ID_REG >> 8)) $((CHIP_ID_REG & 0xff)) r1 2>/dev/null) || true
+	if [ -z "$val" ]; then
+		echo "I2C read failed. Try: zonhor-cam-recover reload"
+		return 1
+	fi
+	echo "CHIP_ID(0x${CHIP_ID_REG}) = ${val} (expect 0x01)"
+}
+
+case "${1:-reload}" in
+	reload)
+		reload_camera_ko
+		i2c_test || true
+		;;
+	i2c-test)
+		i2c_test
+		;;
+	*)
+		die "usage: $0 [reload|i2c-test]"
+		;;
+esac

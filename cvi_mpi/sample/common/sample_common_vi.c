@@ -524,6 +524,8 @@ CVI_S32 SAMPLE_COMM_VI_StartMIPI(SAMPLE_VI_CONFIG_S *pstViConfig)
 		CVI_TRACE_LOG(CVI_DBG_ERR, "UnresetSensor failed! with %#x!\n", s32Ret);
 		return s32Ret;
 	}
+	/* IMX678 and other sensors need time after reset release before I2C responds. */
+	usleep(10000);
 	return s32Ret;
 }
 
@@ -540,6 +542,31 @@ CVI_S32 SAMPLE_COMM_VI_SensorProbe(SAMPLE_VI_CONFIG_S *pstViConfig)
 		ViPipe = pstViInfo->stPipeInfo.aPipe[0];
 		u32SnsId = pstViInfo->stSnsInfo.s32SnsId;
 		pstSnsObj = (ISP_SNS_OBJ_S *)SAMPLE_COMM_ISP_GetSnsObj(u32SnsId);
+
+		/* IMX678 often needs an extra reset/MCLK cycle after a failed session. */
+		if (pstViInfo->stSnsInfo.enSnsType == SONY_IMX678_MIPI_8M_30FPS_12BIT ||
+		    pstViInfo->stSnsInfo.enSnsType == SONY_IMX678_MIPI_2M_30FPS_12BIT) {
+			s32Ret = SAMPLE_COMM_VI_ResetSensor(pstViConfig);
+			if (s32Ret != CVI_SUCCESS)
+				return s32Ret;
+			usleep(10000);
+			s32Ret = SAMPLE_COMM_VI_ResetMipi(pstViConfig);
+			if (s32Ret != CVI_SUCCESS)
+				return s32Ret;
+			usleep(5000);
+			s32Ret = SAMPLE_COMM_VI_SetMipiAttr(pstViConfig);
+			if (s32Ret != CVI_SUCCESS)
+				return s32Ret;
+			s32Ret = SAMPLE_COMM_VI_EnableSensorClock(pstViConfig);
+			if (s32Ret != CVI_SUCCESS)
+				return s32Ret;
+			usleep(20000);
+			s32Ret = SAMPLE_COMM_VI_UnresetSensor(pstViConfig);
+			if (s32Ret != CVI_SUCCESS)
+				return s32Ret;
+			usleep(100000);
+		}
+
 		if (pstSnsObj->pfnSnsProbe) {
 			s32Ret = pstSnsObj->pfnSnsProbe(ViPipe);
 			if (s32Ret != CVI_SUCCESS) {
@@ -829,6 +856,34 @@ CVI_S32 SAMPLE_COMM_VI_StartIsp(SAMPLE_VI_INFO_S *pstViInfo)
 	return CVI_SUCCESS;
 }
 
+static CVI_S32 SAMPLE_COMM_VI_StopSensor(SAMPLE_VI_INFO_S *pstViInfo)
+{
+	VI_PIPE ViPipe;
+	CVI_U32 u32SnsId;
+	CVI_S32 devno;
+	ISP_SNS_OBJ_S *pstSnsObj;
+
+	if (!pstViInfo)
+		return CVI_FAILURE;
+
+	ViPipe = pstViInfo->stPipeInfo.aPipe[0];
+	u32SnsId = pstViInfo->stSnsInfo.s32SnsId;
+	devno = pstViInfo->stSnsInfo.MipiDev;
+
+	pstSnsObj = (ISP_SNS_OBJ_S *)SAMPLE_COMM_ISP_GetSnsObj(u32SnsId);
+	if (pstSnsObj && pstSnsObj->pfnStandby)
+		pstSnsObj->pfnStandby(ViPipe);
+
+	if (devno >= 0) {
+		CVI_S32 s32Ret = CVI_MIPI_SetSensorClock(devno, 0);
+
+		if (s32Ret != CVI_SUCCESS)
+			CVI_TRACE_LOG(CVI_DBG_WARN, "sensor clock disable failed, devno %d\n", devno);
+	}
+
+	return CVI_SUCCESS;
+}
+
 CVI_S32 SAMPLE_COMM_VI_DestroyIsp(SAMPLE_VI_CONFIG_S *pstViConfig)
 {
 	CVI_S32 i;
@@ -845,6 +900,7 @@ CVI_S32 SAMPLE_COMM_VI_DestroyIsp(SAMPLE_VI_CONFIG_S *pstViConfig)
 		s32ViNum  = pstViConfig->as32WorkingViId[i];
 		pstViInfo = &pstViConfig->astViInfo[s32ViNum];
 
+		SAMPLE_COMM_VI_StopSensor(pstViInfo);
 		s32Ret = SAMPLE_COMM_VI_StopIsp(pstViInfo);
 
 		if (s32Ret != CVI_SUCCESS) {

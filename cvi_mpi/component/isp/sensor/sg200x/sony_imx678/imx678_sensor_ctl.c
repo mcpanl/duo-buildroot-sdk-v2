@@ -5,6 +5,8 @@
 #include <syslog.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
+#include <string.h>
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 
@@ -483,7 +485,8 @@ int imx678_read_register(VI_PIPE ViPipe, int addr)
 
 	ret = write(g_fd[ViPipe], buf, imx678_addr_byte);
 	if (ret < 0) {
-		CVI_TRACE_SNS(CVI_DBG_ERR, "I2C_WRITE error!\n");
+		CVI_TRACE_SNS(CVI_DBG_ERR, "I2C_WRITE error! addr=0x%x errno=%d(%s)\n",
+			      addr, errno, strerror(errno));
 		return ret;
 	}
 
@@ -515,7 +518,8 @@ int imx678_write_register(VI_PIPE ViPipe, int addr, int data)
 
 	ret = write(g_fd[ViPipe], buf, imx678_addr_byte + imx678_data_byte);
 	if (ret < 0) {
-		CVI_TRACE_SNS(CVI_DBG_ERR, "I2C_WRITE error!\n");
+		CVI_TRACE_SNS(CVI_DBG_ERR, "I2C_WRITE error! addr=0x%x errno=%d(%s)\n",
+			      addr, errno, strerror(errno));
 		return CVI_FAILURE;
 	}
 	syslog(LOG_DEBUG, "i2c w 0x%x 0x%x\n", addr, data);
@@ -574,22 +578,45 @@ void imx678_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip
 int imx678_probe(VI_PIPE ViPipe)
 {
 	int id;
+	int retry;
 
-	delay_ms(1);
 	if (imx678_i2c_init(ViPipe) != CVI_SUCCESS)
 		return CVI_FAILURE;
 
-	id = imx678_read_register(ViPipe, IMX678_CHIP_ID_ADDR);
-	if (id < 0) {
-		CVI_TRACE_SNS(CVI_DBG_ERR, "read sensor id error\n");
-		return id;
-	}
-	if ((id & 0xff) != IMX678_CHIP_ID) {
-		CVI_TRACE_SNS(CVI_DBG_ERR, "Sensor ID Mismatch! read 0x%x, expect 0x%x\n", id, IMX678_CHIP_ID);
-		return CVI_FAILURE;
+	/* Allow sensor to wake from reset before the first ID read. */
+	delay_ms(10);
+
+	for (retry = 0; retry < 5; retry++) {
+		if (retry > 0)
+			delay_ms(10);
+
+		id = imx678_read_register(ViPipe, IMX678_CHIP_ID_ADDR);
+		if (id >= 0 && (id & 0xff) == IMX678_CHIP_ID)
+			return CVI_SUCCESS;
 	}
 
-	return CVI_SUCCESS;
+	if (id < 0) {
+		CVI_TRACE_SNS(CVI_DBG_ERR, "read sensor id error\n");
+		imx678_i2c_exit(ViPipe);
+		return id;
+	}
+
+	CVI_TRACE_SNS(CVI_DBG_ERR, "Sensor ID Mismatch! read 0x%x, expect 0x%x\n", id, IMX678_CHIP_ID);
+	imx678_i2c_exit(ViPipe);
+	return CVI_FAILURE;
+}
+
+/* Center crop 2880x1620 from full 3856x2180 all-pixel readout (SG2000 5MP limit) */
+static void imx678_apply_5m_crop(VI_PIPE ViPipe)
+{
+	imx678_write_register(ViPipe, 0x303C, 0xE8); /* PIX_HST = 488 */
+	imx678_write_register(ViPipe, 0x303D, 0x01);
+	imx678_write_register(ViPipe, 0x303E, 0x40); /* PIX_HWIDTH = 2880 */
+	imx678_write_register(ViPipe, 0x303F, 0x0B);
+	imx678_write_register(ViPipe, 0x3044, 0x18); /* PIX_VST = 280 */
+	imx678_write_register(ViPipe, 0x3045, 0x01);
+	imx678_write_register(ViPipe, 0x3046, 0x54); /* PIX_VWIDTH = 1620 */
+	imx678_write_register(ViPipe, 0x3047, 0x06);
 }
 
 /* Center crop 1920x1080 from full 3856x2180 all-pixel readout */
@@ -619,7 +646,9 @@ void imx678_init(VI_PIPE ViPipe)
 	imx678_write_register(ViPipe, 0x3000, 0x01);
 	imx678_write_register(ViPipe, 0x3002, 0x01);
 	imx678_write_table(ViPipe, imx678_linear_12bit_3840x2160_regs);
-	if (u8ImgMode == IMX678_MODE_2M30)
+	if (u8ImgMode == IMX678_MODE_8M30)
+		imx678_apply_5m_crop(ViPipe);
+	else if (u8ImgMode == IMX678_MODE_2M30)
 		imx678_apply_1080p_crop(ViPipe);
 
 	imx678_write_register(ViPipe, 0x3002, 0x01);
@@ -639,7 +668,7 @@ void imx678_init(VI_PIPE ViPipe)
 		       "STBY=%#x XMSTA=%#x HMAX=%d VMAX=%d PIX=%dx%d\n",
 		       ViPipe, standby & 0xff, xmsta & 0xff, hmax, vmax, pix_w, pix_h);
 	else
-		printf("ViPipe:%d,===IMX678 8M30fps 12bit LINE Init OK!=== "
+		printf("ViPipe:%d,===IMX678 2880x1620 30fps 12bit LINE(crop) Init OK!=== "
 		       "STBY=%#x XMSTA=%#x HMAX=%d VMAX=%d PIX=%dx%d\n",
 		       ViPipe, standby & 0xff, xmsta & 0xff, hmax, vmax, pix_w, pix_h);
 	g_pastImx678[ViPipe]->bInit = CVI_TRUE;
@@ -647,5 +676,6 @@ void imx678_init(VI_PIPE ViPipe)
 
 void imx678_exit(VI_PIPE ViPipe)
 {
+	imx678_standby(ViPipe);
 	imx678_i2c_exit(ViPipe);
 }

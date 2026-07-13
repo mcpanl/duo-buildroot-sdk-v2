@@ -28,8 +28,9 @@
 #define IMX678_HCG_ADDR 0x3030
 #define IMX678_DGAIN_ADDR 0x3076
 #define IMX678_VMAX_ADDR 0x3028
+#define IMX678_RES_IS_5M(w, h) ((w) <= 2880 && (h) <= 1620)
 #define IMX678_RES_IS_8M(w, h) (((w) <= 3856 && (h) <= 2180) || ((w) <= 3840 && (h) <= 2160))
-#define IMX678_RES_IS_2M(w, h) (((w) <= 3856 && (h) <= 2180) || ((w) <= 1920 && (h) <= 1080))
+#define IMX678_RES_IS_2M(w, h) ((w) <= 1920 && (h) <= 1080)
 #define IMX678_FPS_EXCEEDS_MAX(fps, max) ((fps) > (max) + 0.01f)
 
 ISP_SNS_STATE_S *g_pastImx678[VI_MAX_PIPE_NUM] = {CVI_NULL};
@@ -398,7 +399,8 @@ static CVI_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S 
 
 	if (IMX678_RES_IS_2M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height))
 		u8SensorImageMode = IMX678_MODE_2M30;
-	else if (IMX678_RES_IS_8M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height))
+	else if (IMX678_RES_IS_5M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height) ||
+		 IMX678_RES_IS_8M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height))
 		u8SensorImageMode = IMX678_MODE_8M30;
 	else {
 		CVI_TRACE_SNS(CVI_DBG_ERR, "Not support! Width:%d, Height:%d, Fps:%f, WDRMode:%d\n",

@@ -2146,6 +2146,10 @@ static CVI_VOID _release_vpss_doneq(MMF_CHN_S chn)
 			break;
 		}
 		FIFO_POP(&jobs->doneq, &vb);
+		if (!vb) {
+			mutex_unlock(&jobs->dlock);
+			continue;
+		}
 		vb->mod_ids &= ~BIT(chn.enModId);
 		mutex_unlock(&jobs->dlock);
 		vb_release_block((VB_BLK)vb);
@@ -3410,6 +3414,13 @@ CVI_S32 vpss_destroy_grp(VPSS_GRP VpssGrp)
 		base_mod_jobs_exit(chn, CHN_TYPE_IN);
 
 		for (VpssChn = 0; VpssChn < vpssCtx[VpssGrp]->chnNum; ++VpssChn) {
+			struct vb_jobs_t *out_jobs;
+
+			chn.s32ChnId = VpssChn;
+			out_jobs = base_get_jobs_by_chn(chn, CHN_TYPE_OUT);
+			if (out_jobs && out_jobs->inited)
+				base_mod_jobs_exit(chn, CHN_TYPE_OUT);
+
 			vpssCtx[VpssGrp]->stChnCfgs[VpssChn].enRotation = ROTATION_0;
 			vpssCtx[VpssGrp]->stChnCfgs[VpssChn].stLDCAttr.bEnable = CVI_FALSE;
 

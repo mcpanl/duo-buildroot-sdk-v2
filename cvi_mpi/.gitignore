@@ -11,6 +11,7 @@ sample/sample_ir_auto/sample_ir_auto
 sample/sample_panel/lt9611/lt9611
 sample/sample_panel/sample_panel
 sample/sensor_test/sample_sensor_test
+sample/sensor_lcd/sample_sensor_lcd
 sample/vdec/sample_vdec
 sample/vdec/sample_vdec_asan
 sample/vdecvo/sample_vdecvo

@@ -57,6 +57,9 @@ ifneq ($(FLASH_SIZE_SHRINK),y)
 	@cp -f sample/venc/sample_vcodec $(DESTDIR)/usr/bin
 	@cp -f sample/vdec/sample_vdec $(DESTDIR)/usr/bin
 	@cp -f sample/sensor_test/sample_sensor_test $(DESTDIR)/usr/bin
+	@if [ -f sample/sensor_lcd/sample_sensor_lcd ]; then \
+		cp -f sample/sensor_lcd/sample_sensor_lcd $(DESTDIR)/usr/bin; \
+	fi
 
 	@if [ -f sample/sample_panel/sample_panel ]; then \
 		cp -f sample/sample_panel/sample_panel $(DESTDIR)/usr/bin; \
