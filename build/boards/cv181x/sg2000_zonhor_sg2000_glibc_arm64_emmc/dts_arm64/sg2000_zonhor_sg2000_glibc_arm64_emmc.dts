@@ -161,19 +161,19 @@
 &spi3 {
 	status = "okay";
 	num-cs = <1>;
-	spi-max-frequency = <62500000>;
+	spi-max-frequency = <40000000>;
 
 	/delete-node/ spidev@0;
 
 	jd9853: display@0 {
 		compatible = "jadard,jd9853";
 		reg = <0>;
-		spi-max-frequency = <62500000>;
+		spi-max-frequency = <40000000>;
 		buswidth = <8>;
 		width = <172>;
 		height = <320>;
 		rotate = <0>;
-		fps = <71>;
+		fps = <30>;
 		backlight = <1>;
 		fbtft,skip-init;
 		dc = <&portb 20 0>;
