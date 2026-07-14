@@ -14,27 +14,41 @@
 #include "cvi_vpss.h"
 #include "sample_comm.h"
 #include "fb_lcd.h"
-#include "nv21_rgb565.h"
+#include "rgb888_rgb565.h"
+#include "perf_stats.h"
 
 #define VPSS_ALIGN 64
 #define VPSS_ALIGN_UP(x) ((((x) + VPSS_ALIGN - 1) / VPSS_ALIGN) * VPSS_ALIGN)
 
 /*
- * VPSS channel size before ROTATION_90 (both must be 64-aligned for GDC).
- * 320x172 fails (172 % 64 != 0); use 320x192 -> effective 192x320 after rotate.
+ * GDC rotation only supports NV12/NV21/YUV400 — not RGB888.
+ * Cascade:
+ *   Grp0: scale + ROTATION_90 in NV21 (320x192 -> 192x320)
+ *   Grp1: HW CSC NV21 -> Packed RGB888 (192x320, no rotation)
  */
-#define VPSS_OUT_W 320
-#define VPSS_OUT_H VPSS_ALIGN_UP(172)
+#define VPSS_PRE_W 320
+#define VPSS_PRE_H VPSS_ALIGN_UP(172)
+#define VPSS_DISP_W VPSS_PRE_H
+#define VPSS_DISP_H VPSS_PRE_W
+#define VPSS_CSC_FMT PIXEL_FORMAT_RGB_888
 
-/* Max RGB565 scratch (VPSS_OUT_W * VPSS_OUT_H). */
-#define VPSS_RGB_PIXELS (VPSS_OUT_W * VPSS_OUT_H)
+#define VPSS_GRP_ROT 0
+#define VPSS_GRP_CSC 1
+
+/* Max RGB565 scratch (post-rotate display buffer). */
+#define VPSS_RGB_PIXELS (VPSS_DISP_W * VPSS_DISP_H)
 
 static SAMPLE_VI_CONFIG_S g_stViConfig;
 static SIZE_S g_stSensorSize;
 static volatile sig_atomic_t g_running = 1;
-static CVI_BOOL g_vpss_started = CVI_FALSE;
-static CVI_BOOL g_vpss_bound = CVI_FALSE;
-static CVI_BOOL g_vpss_chn_enabled[VPSS_MAX_PHY_CHN_NUM] = {0};
+static CVI_BOOL g_sys_inited = CVI_FALSE;
+static CVI_BOOL g_vi_inited = CVI_FALSE;
+static CVI_BOOL g_vpss0_started = CVI_FALSE;
+static CVI_BOOL g_vpss1_started = CVI_FALSE;
+static CVI_BOOL g_vi_vpss_bound = CVI_FALSE;
+static CVI_BOOL g_vpss_vpss_bound = CVI_FALSE;
+static CVI_BOOL g_vpss0_chn_enabled[VPSS_MAX_PHY_CHN_NUM] = {0};
+static CVI_BOOL g_vpss1_chn_enabled[VPSS_MAX_PHY_CHN_NUM] = {0};
 static CVI_BOOL g_frame_held = CVI_FALSE;
 static VIDEO_FRAME_INFO_S g_held_frame;
 
@@ -50,6 +64,19 @@ static CVI_U32 vb_pool_blk_size(CVI_U32 w, CVI_U32 h, PIXEL_FORMAT_E fmt)
 				     COMPRESS_MODE_NONE, DEFAULT_ALIGN);
 }
 
+/* Best-effort destroy for leftover groups (e.g. previous failed init). */
+static void vpss_try_destroy(VPSS_GRP grp)
+{
+	CVI_S32 j;
+
+	for (j = 0; j < VPSS_MAX_PHY_CHN_NUM; j++)
+		CVI_VPSS_DisableChn(grp, j);
+	CVI_VPSS_StopGrp(grp);
+	CVI_VPSS_DestroyGrp(grp);
+}
+
+static void sys_mm_deinit(void);
+
 static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 {
 	MMF_VERSION_S stVersion;
@@ -59,8 +86,7 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 	CVI_S32 s32Ret;
 	LOG_LEVEL_CONF_S log_conf;
 	VB_CONFIG_S stVbConf;
-	CVI_U32 u32ViBlk, u32ViRotBlk, u32VpssBlk, u32VpssRotBlk;
-	VPSS_GRP VpssGrp = 0;
+	CVI_U32 u32ViBlk, u32ViRotBlk, u32Nv21Blk, u32Nv21RotBlk, u32RgbBlk;
 	VPSS_CHN VpssChn = VPSS_CHN0;
 	VPSS_GRP_ATTR_S stVpssGrpAttr;
 	VPSS_CHN_ATTR_S astVpssChnAttr[VPSS_MAX_PHY_CHN_NUM];
@@ -104,26 +130,37 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 				       stViConfig.astViInfo[0].stChnInfo.enPixFormat);
 	u32ViBlk = u32ViBlk > u32ViRotBlk ? u32ViBlk : u32ViRotBlk;
 
-	u32VpssBlk = vb_pool_blk_size(VPSS_OUT_W, VPSS_OUT_H, SAMPLE_PIXEL_FORMAT);
-	u32VpssRotBlk = vb_pool_blk_size(VPSS_OUT_H, VPSS_OUT_W, SAMPLE_PIXEL_FORMAT);
-	u32VpssBlk = u32VpssBlk > u32VpssRotBlk ? u32VpssBlk : u32VpssRotBlk;
+	/* Grp0 NV21 (pre- and post-rotate). */
+	u32Nv21Blk = vb_pool_blk_size(VPSS_PRE_W, VPSS_PRE_H, SAMPLE_PIXEL_FORMAT);
+	u32Nv21RotBlk = vb_pool_blk_size(VPSS_DISP_W, VPSS_DISP_H, SAMPLE_PIXEL_FORMAT);
+	u32Nv21Blk = u32Nv21Blk > u32Nv21RotBlk ? u32Nv21Blk : u32Nv21RotBlk;
 
-	stVbConf.u32MaxPoolCnt = 2;
+	/* Grp1 Packed RGB888 (display size). */
+	u32RgbBlk = vb_pool_blk_size(VPSS_DISP_W, VPSS_DISP_H, VPSS_CSC_FMT);
+
+	stVbConf.u32MaxPoolCnt = 3;
 	stVbConf.astCommPool[0].u32BlkSize = u32ViBlk;
 	stVbConf.astCommPool[0].u32BlkCnt = 5;
 	stVbConf.astCommPool[0].enRemapMode = VB_REMAP_MODE_CACHED;
-	stVbConf.astCommPool[1].u32BlkSize = u32VpssBlk;
+	stVbConf.astCommPool[1].u32BlkSize = u32Nv21Blk;
 	stVbConf.astCommPool[1].u32BlkCnt = 4;
 	stVbConf.astCommPool[1].enRemapMode = VB_REMAP_MODE_CACHED;
+	stVbConf.astCommPool[2].u32BlkSize = u32RgbBlk;
+	stVbConf.astCommPool[2].u32BlkCnt = 4;
+	stVbConf.astCommPool[2].enRemapMode = VB_REMAP_MODE_CACHED;
 
 	SAMPLE_PRT("VB pool[0] sensor %ux%u size=%u cnt=%u\n",
 		   g_stSensorSize.u32Width, g_stSensorSize.u32Height,
 		   stVbConf.astCommPool[0].u32BlkSize,
 		   stVbConf.astCommPool[0].u32BlkCnt);
-	SAMPLE_PRT("VB pool[1] vpss %dx%d size=%u cnt=%u\n",
-		   VPSS_OUT_W, VPSS_OUT_H,
+	SAMPLE_PRT("VB pool[1] vpss NV21 %dx%d size=%u cnt=%u\n",
+		   VPSS_PRE_W, VPSS_PRE_H,
 		   stVbConf.astCommPool[1].u32BlkSize,
 		   stVbConf.astCommPool[1].u32BlkCnt);
+	SAMPLE_PRT("VB pool[2] vpss RGB888 %dx%d size=%u cnt=%u\n",
+		   VPSS_DISP_W, VPSS_DISP_H,
+		   stVbConf.astCommPool[2].u32BlkSize,
+		   stVbConf.astCommPool[2].u32BlkCnt);
 
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = sys_handle_signal;
@@ -136,6 +173,7 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 		SAMPLE_PRT("system init failed: %#x\n", s32Ret);
 		return s32Ret;
 	}
+	g_sys_inited = CVI_TRUE;
 
 	s32Ret = SAMPLE_PLAT_VI_INIT(&stViConfig);
 	if (s32Ret != CVI_SUCCESS) {
@@ -144,11 +182,19 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 		SAMPLE_PRT("  zonhor-cam-recover reload   # or reboot\n");
 		SAMPLE_PRT("  i2ctransfer -y 3 w2@0x1a 0x30 0x22 r1   # expect 0x01\n");
 		/* SAMPLE_PLAT_VI_INIT already tears down MMF on error. */
+		g_sys_inited = CVI_FALSE;
 		return s32Ret;
 	}
+	g_vi_inited = CVI_TRUE;
 
+	/* Clear leftovers from previous failed runs (Grp occupied / 0xc0068004). */
+	vpss_try_destroy(VPSS_GRP_ROT);
+	vpss_try_destroy(VPSS_GRP_CSC);
+
+	/* ---- Grp0: scale + ROT90 in NV21 (GDC-compatible) ---- */
 	memset(&stVpssGrpAttr, 0, sizeof(stVpssGrpAttr));
 	memset(astVpssChnAttr, 0, sizeof(astVpssChnAttr));
+	memset(abChnEnable, 0, sizeof(abChnEnable));
 
 	stVpssGrpAttr.stFrameRate.s32SrcFrameRate = -1;
 	stVpssGrpAttr.stFrameRate.s32DstFrameRate = -1;
@@ -157,13 +203,13 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 	stVpssGrpAttr.u32MaxH = g_stSensorSize.u32Height;
 	stVpssGrpAttr.u8VpssDev = 0;
 
-	astVpssChnAttr[VpssChn].u32Width = VPSS_OUT_W;
-	astVpssChnAttr[VpssChn].u32Height = VPSS_OUT_H;
+	astVpssChnAttr[VpssChn].u32Width = VPSS_PRE_W;
+	astVpssChnAttr[VpssChn].u32Height = VPSS_PRE_H;
 	astVpssChnAttr[VpssChn].enVideoFormat = VIDEO_FORMAT_LINEAR;
 	astVpssChnAttr[VpssChn].enPixelFormat = SAMPLE_PIXEL_FORMAT;
 	astVpssChnAttr[VpssChn].stFrameRate.s32SrcFrameRate = -1;
 	astVpssChnAttr[VpssChn].stFrameRate.s32DstFrameRate = -1;
-	astVpssChnAttr[VpssChn].u32Depth = 1;
+	astVpssChnAttr[VpssChn].u32Depth = 0; /* bound to Grp1 */
 	astVpssChnAttr[VpssChn].bMirror = mirror;
 	astVpssChnAttr[VpssChn].bFlip = flip;
 	astVpssChnAttr[VpssChn].stAspectRatio.enMode = ASPECT_RATIO_AUTO;
@@ -172,64 +218,133 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 	astVpssChnAttr[VpssChn].stNormalize.bEnable = CVI_FALSE;
 
 	abChnEnable[VpssChn] = CVI_TRUE;
-	memcpy(g_vpss_chn_enabled, abChnEnable, sizeof(g_vpss_chn_enabled));
-	s32Ret = SAMPLE_COMM_VPSS_Init(VpssGrp, abChnEnable, &stVpssGrpAttr, astVpssChnAttr);
+	memcpy(g_vpss0_chn_enabled, abChnEnable, sizeof(g_vpss0_chn_enabled));
+	s32Ret = SAMPLE_COMM_VPSS_Init(VPSS_GRP_ROT, abChnEnable, &stVpssGrpAttr, astVpssChnAttr);
 	if (s32Ret != CVI_SUCCESS) {
-		SAMPLE_PRT("vpss init failed: %#x\n", s32Ret);
-		return s32Ret;
+		SAMPLE_PRT("vpss grp0 init failed: %#x\n", s32Ret);
+		goto fail;
+	}
+	g_vpss0_started = CVI_TRUE; /* CreateGrp done; Stop destroys even if Start fails */
+
+	s32Ret = SAMPLE_COMM_VPSS_Start(VPSS_GRP_ROT, abChnEnable, &stVpssGrpAttr, astVpssChnAttr);
+	if (s32Ret != CVI_SUCCESS) {
+		SAMPLE_PRT("vpss grp0 start failed: %#x\n", s32Ret);
+		goto fail;
 	}
 
-	s32Ret = SAMPLE_COMM_VPSS_Start(VpssGrp, abChnEnable, &stVpssGrpAttr, astVpssChnAttr);
+	s32Ret = CVI_VPSS_SetChnRotation(VPSS_GRP_ROT, VpssChn, ROTATION_90);
 	if (s32Ret != CVI_SUCCESS) {
-		SAMPLE_PRT("vpss start failed: %#x\n", s32Ret);
-		return s32Ret;
-	}
-	g_vpss_started = CVI_TRUE;
-
-	s32Ret = CVI_VPSS_SetChnRotation(VpssGrp, VpssChn, ROTATION_90);
-	if (s32Ret != CVI_SUCCESS) {
-		SAMPLE_PRT("vpss set rotation failed: %#x\n", s32Ret);
-		return s32Ret;
+		SAMPLE_PRT("vpss grp0 set rotation failed: %#x\n", s32Ret);
+		goto fail;
 	}
 
-	s32Ret = SAMPLE_COMM_VI_Bind_VPSS(0, 0, VpssGrp);
-	if (s32Ret != CVI_SUCCESS) {
-		SAMPLE_PRT("vi bind vpss failed: %#x\n", s32Ret);
-		return s32Ret;
-	}
-	g_vpss_bound = CVI_TRUE;
+	/* ---- Grp1: HW CSC NV21 -> RGB888 (no rotation) ---- */
+	memset(&stVpssGrpAttr, 0, sizeof(stVpssGrpAttr));
+	memset(astVpssChnAttr, 0, sizeof(astVpssChnAttr));
+	memset(abChnEnable, 0, sizeof(abChnEnable));
 
-	SAMPLE_PRT("Pipeline ready: sensor %ux%u -> VPSS %dx%d ROT90 (disp ~%dx%d) -> LCD %dx%d\n",
+	stVpssGrpAttr.stFrameRate.s32SrcFrameRate = -1;
+	stVpssGrpAttr.stFrameRate.s32DstFrameRate = -1;
+	stVpssGrpAttr.enPixelFormat = SAMPLE_PIXEL_FORMAT;
+	stVpssGrpAttr.u32MaxW = VPSS_DISP_W;
+	stVpssGrpAttr.u32MaxH = VPSS_DISP_H;
+	stVpssGrpAttr.u8VpssDev = 0;
+
+	astVpssChnAttr[VpssChn].u32Width = VPSS_DISP_W;
+	astVpssChnAttr[VpssChn].u32Height = VPSS_DISP_H;
+	astVpssChnAttr[VpssChn].enVideoFormat = VIDEO_FORMAT_LINEAR;
+	astVpssChnAttr[VpssChn].enPixelFormat = VPSS_CSC_FMT;
+	astVpssChnAttr[VpssChn].stFrameRate.s32SrcFrameRate = -1;
+	astVpssChnAttr[VpssChn].stFrameRate.s32DstFrameRate = -1;
+	astVpssChnAttr[VpssChn].u32Depth = 1;
+	astVpssChnAttr[VpssChn].bMirror = CVI_FALSE;
+	astVpssChnAttr[VpssChn].bFlip = CVI_FALSE;
+	astVpssChnAttr[VpssChn].stAspectRatio.enMode = ASPECT_RATIO_NONE;
+	astVpssChnAttr[VpssChn].stAspectRatio.bEnableBgColor = CVI_FALSE;
+	astVpssChnAttr[VpssChn].stNormalize.bEnable = CVI_FALSE;
+
+	abChnEnable[VpssChn] = CVI_TRUE;
+	memcpy(g_vpss1_chn_enabled, abChnEnable, sizeof(g_vpss1_chn_enabled));
+	s32Ret = SAMPLE_COMM_VPSS_Init(VPSS_GRP_CSC, abChnEnable, &stVpssGrpAttr, astVpssChnAttr);
+	if (s32Ret != CVI_SUCCESS) {
+		SAMPLE_PRT("vpss grp1 init failed: %#x\n", s32Ret);
+		goto fail;
+	}
+	g_vpss1_started = CVI_TRUE;
+
+	s32Ret = SAMPLE_COMM_VPSS_Start(VPSS_GRP_CSC, abChnEnable, &stVpssGrpAttr, astVpssChnAttr);
+	if (s32Ret != CVI_SUCCESS) {
+		SAMPLE_PRT("vpss grp1 start failed: %#x\n", s32Ret);
+		goto fail;
+	}
+
+	s32Ret = SAMPLE_COMM_VI_Bind_VPSS(0, 0, VPSS_GRP_ROT);
+	if (s32Ret != CVI_SUCCESS) {
+		SAMPLE_PRT("vi bind vpss0 failed: %#x\n", s32Ret);
+		goto fail;
+	}
+	g_vi_vpss_bound = CVI_TRUE;
+
+	s32Ret = SAMPLE_COMM_VPSS_Bind_VPSS(VPSS_GRP_ROT, VpssChn, VPSS_GRP_CSC);
+	if (s32Ret != CVI_SUCCESS) {
+		SAMPLE_PRT("vpss0 bind vpss1 failed: %#x\n", s32Ret);
+		goto fail;
+	}
+	g_vpss_vpss_bound = CVI_TRUE;
+
+	SAMPLE_PRT("Pipeline ready: sensor %ux%u -> VPSS0 %dx%d ROT90 NV21 -> VPSS1 %dx%d RGB888 -> LCD %dx%d\n",
 		   g_stSensorSize.u32Width, g_stSensorSize.u32Height,
-		   VPSS_OUT_W, VPSS_OUT_H, VPSS_OUT_H, VPSS_OUT_W,
+		   VPSS_PRE_W, VPSS_PRE_H, VPSS_DISP_W, VPSS_DISP_H,
 		   FB_LCD_WIDTH, FB_LCD_HEIGHT);
 
 	return CVI_SUCCESS;
+
+fail:
+	sys_mm_deinit();
+	return s32Ret;
 }
 
 static void sys_mm_deinit(void)
 {
-	VPSS_GRP VpssGrp = 0;
 	VPSS_CHN VpssChn = VPSS_CHN0;
 
 	if (g_frame_held) {
-		CVI_VPSS_ReleaseChnFrame(VpssGrp, VpssChn, &g_held_frame);
+		CVI_VPSS_ReleaseChnFrame(VPSS_GRP_CSC, VpssChn, &g_held_frame);
 		g_frame_held = CVI_FALSE;
 	}
 
-	if (g_vpss_bound) {
-		SAMPLE_COMM_VI_UnBind_VPSS(0, 0, VpssGrp);
-		g_vpss_bound = CVI_FALSE;
+	if (g_vpss_vpss_bound) {
+		SAMPLE_COMM_VPSS_UnBind_VPSS(VPSS_GRP_ROT, VpssChn, VPSS_GRP_CSC);
+		g_vpss_vpss_bound = CVI_FALSE;
 	}
-	if (g_vpss_started) {
-		SAMPLE_COMM_VPSS_Stop(VpssGrp, g_vpss_chn_enabled);
-		g_vpss_started = CVI_FALSE;
-		memset(g_vpss_chn_enabled, 0, sizeof(g_vpss_chn_enabled));
+	if (g_vi_vpss_bound) {
+		SAMPLE_COMM_VI_UnBind_VPSS(0, 0, VPSS_GRP_ROT);
+		g_vi_vpss_bound = CVI_FALSE;
+	}
+	if (g_vpss1_started) {
+		SAMPLE_COMM_VPSS_Stop(VPSS_GRP_CSC, g_vpss1_chn_enabled);
+		g_vpss1_started = CVI_FALSE;
+		memset(g_vpss1_chn_enabled, 0, sizeof(g_vpss1_chn_enabled));
+	} else {
+		vpss_try_destroy(VPSS_GRP_CSC);
+	}
+	if (g_vpss0_started) {
+		SAMPLE_COMM_VPSS_Stop(VPSS_GRP_ROT, g_vpss0_chn_enabled);
+		g_vpss0_started = CVI_FALSE;
+		memset(g_vpss0_chn_enabled, 0, sizeof(g_vpss0_chn_enabled));
+	} else {
+		vpss_try_destroy(VPSS_GRP_ROT);
 	}
 
-	SAMPLE_COMM_VI_DestroyIsp(&g_stViConfig);
-	SAMPLE_COMM_VI_DestroyVi(&g_stViConfig);
-	SAMPLE_COMM_SYS_Exit();
+	if (g_vi_inited) {
+		SAMPLE_COMM_VI_DestroyIsp(&g_stViConfig);
+		SAMPLE_COMM_VI_DestroyVi(&g_stViConfig);
+		g_vi_inited = CVI_FALSE;
+	}
+	if (g_sys_inited) {
+		SAMPLE_COMM_SYS_Exit();
+		g_sys_inited = CVI_FALSE;
+	}
 }
 
 static CVI_S32 map_vpss_frame(VIDEO_FRAME_INFO_S *pstFrame, void **ppVir,
@@ -283,14 +398,14 @@ int main(int argc, char **argv)
 	FB_LCD_S fb_lcd;
 	uint16_t *rgb_buf = NULL;
 	VIDEO_FRAME_INFO_S stFrame;
-	VPSS_GRP VpssGrp = 0;
 	VPSS_CHN VpssChn = VPSS_CHN0;
 	CVI_BOOL mirror = CVI_FALSE;
 	CVI_BOOL flip = CVI_FALSE;
 	int opt;
 	int frame_count = 0;
-	int fps_count = 0;
-	struct timespec fps_start, frame_start, frame_end;
+	struct timespec perf_report_start;
+	struct timespec frame_loop_start, frame_loop_end;
+	struct timespec step_start, step_end;
 	CVI_BOOL first_frame_logged = CVI_FALSE;
 
 	while ((opt = getopt(argc, argv, "mfh")) != -1) {
@@ -330,62 +445,76 @@ int main(int argc, char **argv)
 	fb_lcd_clear(&fb_lcd, 0x0000);
 
 	usleep(500 * 1000);
-	clock_gettime(CLOCK_MONOTONIC, &fps_start);
+	perf_timespec_now(&perf_report_start);
 
 	SAMPLE_PRT("Preview started. Press Ctrl+C to exit.\n");
+	SAMPLE_PRT("Perf stats every %ds (temporary instrumentation).\n",
+		   PERF_REPORT_INTERVAL_SEC);
 
 	while (g_running) {
 		void *vir_addr = NULL;
 		size_t map_size = 0;
 
-		clock_gettime(CLOCK_MONOTONIC, &frame_start);
+		perf_timespec_now(&frame_loop_start);
 
-		s32Ret = CVI_VPSS_GetChnFrame(VpssGrp, VpssChn, &stFrame, 1000);
+		perf_timespec_now(&step_start);
+		s32Ret = CVI_VPSS_GetChnFrame(VPSS_GRP_CSC, VpssChn, &stFrame, 1000);
+		perf_timespec_now(&step_end);
 		if (s32Ret != CVI_SUCCESS)
 			continue;
+		perf_record(PERF_VPSS_GET_FRAME, perf_elapsed_ns(&step_start, &step_end));
 
 		g_held_frame = stFrame;
 		g_frame_held = CVI_TRUE;
 
 		if (!first_frame_logged) {
-			SAMPLE_PRT("VPSS frame %ux%u stride Y=%u UV=%u fmt=%d\n",
+			SAMPLE_PRT("VPSS frame %ux%u stride=%u fmt=%d (expect RGB_888=%d)\n",
 				   stFrame.stVFrame.u32Width, stFrame.stVFrame.u32Height,
 				   stFrame.stVFrame.u32Stride[0],
-				   stFrame.stVFrame.u32Stride[1],
-				   stFrame.stVFrame.enPixelFormat);
+				   stFrame.stVFrame.enPixelFormat,
+				   PIXEL_FORMAT_RGB_888);
 			first_frame_logged = CVI_TRUE;
 		}
 
+		perf_timespec_now(&step_start);
 		if (map_vpss_frame(&stFrame, &vir_addr, &map_size) == CVI_SUCCESS) {
+			perf_timespec_now(&step_end);
+			perf_record(PERF_VPSS_MAP, perf_elapsed_ns(&step_start, &step_end));
+
 			CVI_U32 fw = stFrame.stVFrame.u32Width;
 			CVI_U32 fh = stFrame.stVFrame.u32Height;
 
-			if (fw > 0 && fh > 0 && fw * fh <= VPSS_RGB_PIXELS &&
-			    nv21_frame_to_rgb565(&stFrame.stVFrame, rgb_buf) == 0) {
-				fb_lcd_draw_rgb565(&fb_lcd, rgb_buf, (int)fw, (int)fh);
+			if (fw > 0 && fh > 0 && fw * fh <= VPSS_RGB_PIXELS) {
+				perf_timespec_now(&step_start);
+				if (rgb888_frame_to_rgb565(&stFrame.stVFrame, rgb_buf) == 0) {
+					perf_timespec_now(&step_end);
+					perf_record(PERF_RGB888_RGB565,
+						    perf_elapsed_ns(&step_start, &step_end));
+
+					fb_lcd_draw_rgb565(&fb_lcd, rgb_buf, (int)fw, (int)fh);
+				}
 			}
+
+			perf_timespec_now(&step_start);
 			unmap_vpss_frame(vir_addr, map_size);
+			perf_timespec_now(&step_end);
+			perf_record(PERF_VPSS_UNMAP, perf_elapsed_ns(&step_start, &step_end));
 		}
 
-		CVI_VPSS_ReleaseChnFrame(VpssGrp, VpssChn, &stFrame);
+		perf_timespec_now(&step_start);
+		CVI_VPSS_ReleaseChnFrame(VPSS_GRP_CSC, VpssChn, &stFrame);
+		perf_timespec_now(&step_end);
+		perf_record(PERF_VPSS_RELEASE, perf_elapsed_ns(&step_start, &step_end));
 		g_frame_held = CVI_FALSE;
 
 		frame_count++;
-		fps_count++;
-		clock_gettime(CLOCK_MONOTONIC, &frame_end);
+		perf_timespec_now(&frame_loop_end);
+		perf_record(PERF_FRAME_TOTAL,
+			    perf_elapsed_ns(&frame_loop_start, &frame_loop_end));
 
-		{
-			double elapsed = (frame_end.tv_sec - fps_start.tv_sec)
-				+ (frame_end.tv_nsec - fps_start.tv_nsec) / 1e9;
-			double frame_ms = (frame_end.tv_sec - frame_start.tv_sec) * 1000.0
-				+ (frame_end.tv_nsec - frame_start.tv_nsec) / 1e6;
-
-			if (elapsed >= 1.0) {
-				SAMPLE_PRT("FPS: %.1f  last frame: %.1f ms\n",
-					   fps_count / elapsed, frame_ms);
-				fps_count = 0;
-				fps_start = frame_end;
-			}
+		if (perf_report_due(&perf_report_start, PERF_REPORT_INTERVAL_SEC)) {
+			perf_print_report();
+			perf_reset_window();
 		}
 	}
 

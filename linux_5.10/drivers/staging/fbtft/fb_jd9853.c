@@ -29,6 +29,8 @@ static int init_display_preserve(struct fbtft_par *par)
 	/* Orientation must match U-Boot jd9853_logo (mirror X + invert) */
 	write_reg(par, MIPI_DCS_SET_ADDRESS_MODE, BIT(6));
 	write_reg(par, 0x21);
+	/* Enable TE output on GPIO (vblank sync pulse) */
+	write_reg(par, MIPI_DCS_SET_TEAR_ON, 0x00);
 	return 0;
 }
 
@@ -76,7 +78,7 @@ static int init_display(struct fbtft_par *par)
 	write_reg(par, 0xE5, 0x01, 0x02, 0x00);
 
 	write_reg(par, 0xDE, 0x00);
-	write_reg(par, 0x35, 0x00);
+	write_reg(par, MIPI_DCS_SET_TEAR_ON, 0x00);
 	write_reg(par, 0x3A, 0x05);
 	write_reg(par, 0x2A, 0x00, 0x22, 0x00, 0xCD);
 	write_reg(par, 0x2B, 0x00, 0x00, 0x01, 0x3F);

@@ -8,7 +8,6 @@ SYS_KO=/mnt/system/ko/cv181x_sys.ko
 BASE_KO=/mnt/system/ko/cv181x_base.ko
 UID_SYSFS=/sys/class/cvi-base/base_uid
 IFACE_WAIT_MAX=30
-BRING_UP=auto
 
 load_base_modules() {
 	if ! lsmod | grep -q '^cv181x_sys '; then
@@ -60,64 +59,23 @@ wait_for_iface() {
 	return 1
 }
 
-iface_is_up() {
-	iface=$1
-	ip link show "$iface" 2>/dev/null | grep -q '<[^>]*UP'
-}
-
 set_iface_mac() {
 	iface=$1
 	mac=$2
-	bring_up=$3
-	was_up=0
 
 	wait_for_iface "$iface" || {
 		echo "zonhor-mac-from-uid: interface $iface not found" >&2
 		return 1
 	}
 
-	if iface_is_up "$iface"; then
-		was_up=1
-	fi
-
 	ip link set "$iface" down 2>/dev/null
 	ip link set "$iface" address "$mac" || return 1
-	case "$bring_up" in
-	1)
-		ip link set "$iface" up 2>/dev/null
-		;;
-	auto)
-		# eth0 is prepared before networking starts. For wlan0, preserve the
-		# previous state so setting a MAC does not power up RF during boot.
-		if [ "$iface" = eth0 ] || [ "$was_up" -eq 1 ]; then
-			ip link set "$iface" up 2>/dev/null
-		fi
-		;;
-	esac
+	ip link set "$iface" up 2>/dev/null
 	echo "zonhor-mac-from-uid: set $iface address to $mac" >&2
 }
 
 main() {
-	iface=eth0
-
-	while [ $# -gt 0 ]; do
-		case "$1" in
-		--up)
-			BRING_UP=1
-			;;
-		--no-up|--down)
-			BRING_UP=0
-			;;
-		-*)
-			echo "Usage: $0 [--up|--no-up] [eth0|wlan0]" >&2
-			return 1
-			;;
-		*)
-			iface="$1"
-			;;
-		esac
-		shift
-	done
+	iface="${1:-eth0}"
 
 	load_base_modules || {
 		echo "zonhor-mac-from-uid: failed to load base modules" >&2
@@ -129,7 +87,7 @@ main() {
 		return 1
 	}
 
-	set_iface_mac "$iface" "$mac" "$BRING_UP" || return 1
+	set_iface_mac "$iface" "$mac" || return 1
 	printf '%s\n' "$mac"
 }
 

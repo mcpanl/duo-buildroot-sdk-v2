@@ -24,6 +24,7 @@
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/spinlock.h>
+#include <linux/jiffies.h>
 
 #include <video/mipi_display.h>
 
@@ -36,6 +37,16 @@
 static unsigned long debug;
 module_param(debug, ulong, 0000);
 MODULE_PARM_DESC(debug, "override device debug level");
+
+static int fps_log_interval_ms = 10000;
+module_param(fps_log_interval_ms, int, 0644);
+MODULE_PARM_DESC(fps_log_interval_ms,
+		 "Log average display refresh fps every N ms (0=disable)");
+
+static int fps_log_every_n_frames = 30;
+module_param(fps_log_every_n_frames, int, 0644);
+MODULE_PARM_DESC(fps_log_every_n_frames,
+		 "Log display refresh fps every N frames (0=disable)");
 
 int fbtft_write_buf_dc(struct fbtft_par *par, void *buf, size_t len, int dc)
 {
@@ -109,6 +120,22 @@ static int fbtft_request_one_gpio(struct fbtft_par *par,
 			return 0;
 		}
 
+		if (!strcmp(name, "te")) {
+			ret = devm_gpio_request_one(dev, gpio, GPIOF_IN,
+						    dev->driver->name);
+			if (ret) {
+				dev_err(dev,
+					"gpio_request_one('%s'=%d) failed with %d\n",
+					name, gpio, ret);
+				return ret;
+			}
+			*gpiop = gpio_to_desc(gpio);
+			fbtft_par_dbg(DEBUG_REQUEST_GPIOS, par,
+				      "%s: '%s' = GPIO%d (input)\n",
+				      __func__, name, gpio);
+			return 0;
+		}
+
 		//active low translates to initially low
 		flags = (of_flags & OF_GPIO_ACTIVE_LOW) ? GPIOF_OUT_INIT_LOW : GPIOF_OUT_INIT_HIGH;
 		ret = devm_gpio_request_one(dev, gpio, flags, dev->driver->name);
@@ -165,7 +192,96 @@ static int fbtft_request_gpios(struct fbtft_par *par)
 			return ret;
 	}
 
+	ret = fbtft_request_one_gpio(par, "te", 0, &par->gpio.te);
+	if (ret)
+		return ret;
+
 	return 0;
+}
+
+static void fbtft_wait_te(struct fbtft_par *par)
+{
+	struct gpio_desc *te = par->gpio.te;
+	unsigned long timeout_jiffies;
+	bool warned;
+
+	if (!te)
+		return;
+
+	timeout_jiffies = jiffies + msecs_to_jiffies(50);
+	warned = false;
+
+	/* Leave vertical blanking if TE is currently active */
+	while (gpiod_get_value_cansleep(te)) {
+		if (!time_before(jiffies, timeout_jiffies)) {
+			if (!warned) {
+				dev_warn(par->info->device,
+					 "TE wait timeout (high), updating unsynced\n");
+				warned = true;
+			}
+			return;
+		}
+		usleep_range(100, 200);
+	}
+
+	/* Wait for rising edge: start of next vertical blanking */
+	while (!gpiod_get_value_cansleep(te)) {
+		if (!time_before(jiffies, timeout_jiffies)) {
+			if (!warned) {
+				dev_warn(par->info->device,
+					 "TE wait timeout (low), updating unsynced\n");
+				warned = true;
+			}
+			return;
+		}
+		usleep_range(100, 200);
+	}
+}
+
+static void fbtft_fps_account(struct fbtft_par *par, ktime_t now)
+{
+	s64 period_us, elapsed_ms;
+	long fps;
+
+	if (!fps_log_interval_ms && !fps_log_every_n_frames)
+		return;
+
+	par->fps.frame_window_count++;
+	par->fps.interval_count++;
+
+	if (fps_log_every_n_frames > 0) {
+		if (!ktime_to_ns(par->fps.frame_window_start))
+			par->fps.frame_window_start = now;
+
+		if (par->fps.frame_window_count >= fps_log_every_n_frames) {
+			period_us = ktime_us_delta(now,
+						   par->fps.frame_window_start);
+			fps = period_us ?
+			      (fps_log_every_n_frames * 1000000LL) / period_us :
+			      0;
+			dev_info(par->info->device,
+				 "display refresh: %ld fps (last %d frames, %lld us)\n",
+				 fps, fps_log_every_n_frames, period_us);
+			par->fps.frame_window_start = now;
+			par->fps.frame_window_count = 0;
+		}
+	}
+
+	if (fps_log_interval_ms > 0) {
+		if (!ktime_to_ns(par->fps.interval_start))
+			par->fps.interval_start = now;
+
+		elapsed_ms = ktime_ms_delta(now, par->fps.interval_start);
+		if (elapsed_ms >= fps_log_interval_ms) {
+			fps = elapsed_ms ?
+			      (par->fps.interval_count * 1000LL) / elapsed_ms : 0;
+			dev_info(par->info->device,
+				 "display refresh: %ld fps (over %lld ms, %llu updates)\n",
+				 fps, elapsed_ms, par->fps.interval_count);
+			par->fps.interval_start = now;
+			par->fps.interval_count = 0;
+		}
+	}
 }
 
 #ifdef CONFIG_FB_BACKLIGHT
@@ -335,11 +451,14 @@ static void fbtft_update_display(struct fbtft_par *par, unsigned int start_line,
 
 	offset = start_line * par->info->fix.line_length;
 	len = (end_line - start_line + 1) * par->info->fix.line_length;
+	fbtft_wait_te(par);
 	ret = par->fbtftops.write_vmem(par, offset, len);
 	if (ret < 0)
 		dev_err(par->info->device,
 			"%s: write_vmem failed to update display buffer\n",
 			__func__);
+	else
+		fbtft_fps_account(par, ktime_get());
 
 	if (unlikely(timeit)) {
 		ts_end = ktime_get();
@@ -849,6 +968,7 @@ int fbtft_register_framebuffer(struct fb_info *fb_info)
 	int ret;
 	char text1[50] = "";
 	char text2[50] = "";
+	char text3[50] = "";
 	struct fbtft_par *par = fb_info->par;
 	struct spi_device *spi = par->spi;
 
@@ -876,10 +996,13 @@ int fbtft_register_framebuffer(struct fb_info *fb_info)
 	if (par->skip_init) {
 		dev_info(fb_info->device,
 			 "fbtft skip-init: preserving U-Boot panel state\n");
-	} else {
-		ret = par->fbtftops.init_display(par);
-		if (ret < 0)
-			goto reg_fail;
+	}
+
+	ret = par->fbtftops.init_display(par);
+	if (ret < 0)
+		goto reg_fail;
+
+	if (!par->skip_init) {
 		if (par->fbtftops.set_var) {
 			ret = par->fbtftops.set_var(par);
 			if (ret < 0)
@@ -910,11 +1033,13 @@ int fbtft_register_framebuffer(struct fb_info *fb_info)
 	if (spi)
 		sprintf(text2, ", spi%d.%d at %d MHz", spi->master->bus_num,
 			spi->chip_select, spi->max_speed_hz / 1000000);
+	if (par->gpio.te)
+		sprintf(text3, ", TE sync on");
 	dev_info(fb_info->dev,
-		 "%s frame buffer, %dx%d, %d KiB video memory%s, fps=%lu%s\n",
+		 "%s frame buffer, %dx%d, %d KiB video memory%s, fps=%lu%s%s\n",
 		 fb_info->fix.id, fb_info->var.xres, fb_info->var.yres,
 		 fb_info->fix.smem_len >> 10, text1,
-		 HZ / fb_info->fbdefio->delay, text2);
+		 HZ / fb_info->fbdefio->delay, text2, text3);
 
 #ifdef CONFIG_FB_BACKLIGHT
 	/* Turn on backlight if available */

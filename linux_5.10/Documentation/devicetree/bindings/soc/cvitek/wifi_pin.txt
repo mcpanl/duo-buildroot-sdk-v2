@@ -1,9 +1,6 @@
-Cvitek wifi pin driver
+sCvitek wifi pin driver
 
 Required properties:
 - compatible: "cvitek,wifi-pin"
-- poweron-gpio: Wifi chip power on gpio
-- wakeup-gpio: Wifi chip wake-host gpio (module -> host, OOB IRQ)
-
-Optional properties:
-- host-wake-gpio: Host wake-wifi gpio (host -> module)
+- power-gpio: Wifi chip power on gpio
+- wakeup-gpio: Wifi chip wakeup gpio

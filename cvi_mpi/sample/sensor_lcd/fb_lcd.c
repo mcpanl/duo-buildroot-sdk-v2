@@ -1,4 +1,5 @@
 #include "fb_lcd.h"
+#include "perf_stats.h"
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -82,10 +83,12 @@ void fb_lcd_close(FB_LCD_S *fb)
 void fb_lcd_clear(FB_LCD_S *fb, uint16_t color)
 {
 	int y;
+	struct timespec t0, t1;
 
 	if (!fb || !fb->fb)
 		return;
 
+	perf_timespec_now(&t0);
 	for (y = 0; y < fb->height; y++) {
 		uint16_t *row = (uint16_t *)((uint8_t *)fb->fb + y * fb->line_length);
 		int x;
@@ -93,6 +96,8 @@ void fb_lcd_clear(FB_LCD_S *fb, uint16_t color)
 		for (x = 0; x < fb->width; x++)
 			row[x] = color;
 	}
+	perf_timespec_now(&t1);
+	perf_record(PERF_FB_CLEAR, perf_elapsed_ns(&t0, &t1));
 }
 
 void fb_lcd_draw_rgb565(FB_LCD_S *fb, const uint16_t *src, int src_w, int src_h)
@@ -126,14 +131,21 @@ void fb_lcd_draw_rgb565(FB_LCD_S *fb, const uint16_t *src, int src_w, int src_h)
 	off_x = (fb->width - draw_w) / 2;
 	off_y = (fb->height - draw_h) / 2;
 
-	for (y = 0; y < draw_h; y++) {
-		int src_y = crop_y + y;
-		int dst_y = fb->height - 1 - (off_y + y);
-		const uint16_t *src_row = src + src_y * src_w + crop_x;
-		uint16_t *dst_row = (uint16_t *)((uint8_t *)fb->fb +
-						 dst_y * fb->line_length);
+	{
+		struct timespec t0, t1;
 
-		for (x = 0; x < draw_w; x++)
-			dst_row[off_x + x] = src_row[x];
+		perf_timespec_now(&t0);
+		for (y = 0; y < draw_h; y++) {
+			int src_y = crop_y + y;
+			int dst_y = fb->height - 1 - (off_y + y);
+			const uint16_t *src_row = src + src_y * src_w + crop_x;
+			uint16_t *dst_row = (uint16_t *)((uint8_t *)fb->fb +
+							 dst_y * fb->line_length);
+
+			for (x = 0; x < draw_w; x++)
+				dst_row[off_x + x] = src_row[x];
+		}
+		perf_timespec_now(&t1);
+		perf_record(PERF_FB_BLIT, perf_elapsed_ns(&t0, &t1));
 	}
 }

@@ -48,16 +48,6 @@
 		beeper-hz = <4000>;
 		amp-supply = <&buzzer_amp>;
 	};
-
-	/* AIC8800 BT bluesleep (HOST_WAKE_BT / BT_WAKE_HOST) */
-	btlpm {
-		compatible = "allwinner,sunxi-btlpm";
-		bt_wake = <&porte 10 GPIO_ACTIVE_HIGH>;
-		bt_hostwake = <&porte 11 GPIO_ACTIVE_HIGH>;
-		uart_index = <4>;
-		wakeup-source;
-		status = "okay";
-	};
 };
 
 &{/aliases} {
@@ -171,23 +161,24 @@
 &spi3 {
 	status = "okay";
 	num-cs = <1>;
-	spi-max-frequency = <40000000>;
+	spi-max-frequency = <62500000>;
 
 	/delete-node/ spidev@0;
 
 	jd9853: display@0 {
 		compatible = "jadard,jd9853";
 		reg = <0>;
-		spi-max-frequency = <40000000>;
+		spi-max-frequency = <62500000>;
 		buswidth = <8>;
 		width = <172>;
 		height = <320>;
 		rotate = <0>;
-		fps = <30>;
+		fps = <71>;
 		backlight = <1>;
 		fbtft,skip-init;
 		dc = <&portb 20 0>;
 		reset = <&portb 12 GPIO_ACTIVE_LOW>;
+		te = <&portb 11 0>;
 		led = <&porta 20 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
@@ -238,15 +229,13 @@
 	sd-uhs-sdr104;
 	min-frequency = <400000>;
 	max-frequency = <187500000>;
-	keep-power-in-suspend;
 };
 
 &wifi_pin {
 	status = "okay";
 	compatible = "cvitek,wifi-pin";
 	poweron-gpio = <&porta 15 GPIO_ACTIVE_HIGH>;
-	wakeup-gpio = <&porte 5 GPIO_ACTIVE_HIGH>;     /* WIFI_WAKE_HOST */
-	host-wake-gpio = <&porte 3 GPIO_ACTIVE_HIGH>; /* HOST_WAKE_WF */
+	wakeup-gpio = <&porte 7 GPIO_ACTIVE_HIGH>;
 };
 
 &usb {

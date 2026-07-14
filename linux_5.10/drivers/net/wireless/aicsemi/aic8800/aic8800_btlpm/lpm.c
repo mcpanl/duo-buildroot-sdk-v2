@@ -11,6 +11,8 @@
  *
  */
 
+#define DEBUG
+
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -390,7 +392,7 @@ static ssize_t bluesleep_write_proc_btwrite(struct file *file,
 	return count;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops lpm_fops = {
 	.proc_open	= bluesleep_lpm_proc_open,
 	.proc_read	= seq_read,
@@ -759,39 +761,10 @@ MODULE_PARM_DESC(assert_level, "BT_LPM hostwake/btwake assert level");
 #if 1
 static struct platform_device *sw_uart_get_pdev(int id)
 {
-	struct device_node *np = NULL;
-	struct device_node *aliases;
-	char alias[20];
-	char nodename[20];
-	const char *path;
-
-	/* Prefer /aliases/serialN (CVITEK and most platforms) */
-	sprintf(alias, "serial%d", id);
-	aliases = of_find_node_by_path("/aliases");
-	if (aliases) {
-		path = of_get_property(aliases, alias, NULL);
-		if (path)
-			np = of_find_node_by_path(path);
-		of_node_put(aliases);
-	}
-
-	/* Allwinner: device_type = "uartN" */
-	if (!np) {
-		sprintf(nodename, "uart%d", id);
-		np = of_find_node_by_type(NULL, nodename);
-	}
-
-	/* Fallback: node name uartN */
-	if (!np) {
-		sprintf(nodename, "uart%d", id);
-		np = of_find_node_by_name(NULL, nodename);
-	}
-
-	if (!np) {
-		BT_ERR("uart%d device node not found\n", id);
-		return NULL;
-	}
-
+	struct device_node *np;
+	char match[20];
+	sprintf(match, "uart%d", id);
+	np = of_find_node_by_type(NULL, match);
 	return of_find_device_by_node(np);
 }
 #endif
@@ -805,17 +778,10 @@ static int bluesleep_probe(struct platform_device *pdev)
 	int ret, uart_index;
 	u32 val;
 
-	if (!np) {
-		BT_ERR("allwinner,sunxi-btlpm node not found in DT\n");
-		return -ENODEV;
-	}
-
 	bsi = devm_kzalloc(&pdev->dev, sizeof(struct bluesleep_info),
 			GFP_KERNEL);
-	if (!bsi) {
-		of_node_put(np);
+	if (!bsi)
 		return -ENOMEM;
-	}
 
 	bsi->host_wake = of_get_named_gpio_flags(np, "bt_hostwake", 0, &config);
 	if (!gpio_is_valid(bsi->host_wake)) {
@@ -920,8 +886,6 @@ static int bluesleep_probe(struct platform_device *pdev)
 		case 0:
 		case 1:
 		case 2:
-		case 3:
-		case 4:
 			uart_index = val;
 			break;
 		default:

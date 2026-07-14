@@ -176,6 +176,7 @@ struct fbtft_platform_data {
  * @gpio.cs: LCD Chip Select with parallel interface bus
  * @gpio.db[16]: Parallel databus
  * @gpio.led[16]: Led control signals
+ * @gpio.te: Tearing Effect input (vertical sync from panel)
  * @gpio.aux[16]: Auxiliary signals, not used by core
  * @init_sequence: Pointer to LCD initialization array
  * @gamma.lock: Mutex for Gamma curve locking
@@ -186,6 +187,7 @@ struct fbtft_platform_data {
  * @current_debug:
  * @first_update_done: Used to only time the first display update
  * @update_time: Used to calculate 'fps' in debug output
+ * @fps: Rolling display refresh statistics
  * @bgr: BGR mode/\n
  * @extra: Extra info needed by driver
  */
@@ -215,8 +217,15 @@ struct fbtft_par {
 		struct gpio_desc *cs;
 		struct gpio_desc *db[16];
 		struct gpio_desc *led[16];
+		struct gpio_desc *te;
 		struct gpio_desc *aux[16];
 	} gpio;
+	struct {
+		u64 frame_window_count;
+		u64 interval_count;
+		ktime_t frame_window_start;
+		ktime_t interval_start;
+	} fps;
 	const s16 *init_sequence;
 	struct {
 		struct mutex lock;
