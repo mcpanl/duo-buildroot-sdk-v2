@@ -323,11 +323,21 @@ Linux 仅：业务逻辑、网络、存储、TPU 推理、UI 合成写共享缓�
 
 | 组件 | 现状 |
 |------|------|
-| SPI3 HAL/驱动 | RTOS **无**（仅有 SPI1 pinmux 定义） |
-| GPIO | 极简（仅 `gpio_direction_output`），**无输入/TE 中断** |
-| JD9853 驱动 | U-Boot 有（`u-boot-2021.10/cmd/jd9853_logo.c`），Linux 有 `fbtft`，RTOS **无** |
+| SPI3 HAL/驱动 | ✅ RTOS `hal_spi3`（DW APB SSI @ 0x041B0000）|
+| GPIO | ✅ 扩展 input/`gpio_get_value`（TE 轮询） |
+| JD9853 驱动 | ✅ RTOS `jd9853_panel`（skip-init + TE）；U-Boot/Linux 保留 |
+| `/dev/fb0` 双路径 | ✅ `lcd_owner=rtos` → `cv181x_zonhor_lcd_proxy`；`linux` → `fb_jd9853` |
+| display_shm | ✅ carveout `0x95300000` 1MB，见 `osdrv/include/display_shm.h` |
 | Hynitron 触摸 | 仅 Linux，RTOS 需移植 |
-| 双核争用 | Linux 须 disable `spi3`/`jd9853`/`hynitron` 或协调所有权 |
+| 双核争用 | Linux `fb_jd9853` 在 `cvi.lcd_owner!=linux` 时 probe 拒绝 |
+
+**切换：**
+```
+fw_setenv lcd_owner rtos    # 默认，小核 SPI+TE
+fw_setenv lcd_owner linux   # 回退 fbtft
+reset
+```
+板上自检：`zonhor-lcd-check status|fill`
 
 可复用参考：
 

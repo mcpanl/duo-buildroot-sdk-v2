@@ -545,7 +545,8 @@ CVI_S32 SAMPLE_COMM_VI_SensorProbe(SAMPLE_VI_CONFIG_S *pstViConfig)
 
 		/* IMX678 often needs an extra reset/MCLK cycle after a failed session. */
 		if (pstViInfo->stSnsInfo.enSnsType == SONY_IMX678_MIPI_8M_30FPS_12BIT ||
-		    pstViInfo->stSnsInfo.enSnsType == SONY_IMX678_MIPI_2M_30FPS_12BIT) {
+		    pstViInfo->stSnsInfo.enSnsType == SONY_IMX678_MIPI_2M_30FPS_12BIT ||
+		    pstViInfo->stSnsInfo.enSnsType == SONY_IMX678_MIPI_2M_30FPS_10BIT_BIN) {
 			s32Ret = SAMPLE_COMM_VI_ResetSensor(pstViConfig);
 			if (s32Ret != CVI_SUCCESS)
 				return s32Ret;

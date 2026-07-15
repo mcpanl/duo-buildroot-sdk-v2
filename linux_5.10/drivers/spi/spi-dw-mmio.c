@@ -20,6 +20,7 @@
 #include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
+#include <linux/string.h>
 
 #include "spi-dw.h"
 
@@ -222,6 +223,31 @@ static int dw_spi_keembay_init(struct platform_device *pdev,
 	return 0;
 }
 
+/* Zonhor: SPI3 @ 0x041B0000 is owned by FreeRTOS when cvi.lcd_owner!=linux. */
+static bool zonhor_spi3_owned_by_rtos(struct resource *mem)
+{
+	struct device_node *chosen;
+	const char *bootargs = NULL;
+	const char *s;
+
+	if (!mem || mem->start != 0x041B0000)
+		return false;
+
+	chosen = of_find_node_by_path("/chosen");
+	if (chosen) {
+		of_property_read_string(chosen, "bootargs", &bootargs);
+		of_node_put(chosen);
+	}
+	if (!bootargs)
+		return true; /* default rtos */
+
+	s = strstr(bootargs, "cvi.lcd_owner=");
+	if (!s)
+		return true;
+	s += strlen("cvi.lcd_owner=");
+	return strncmp(s, "linux", 5) != 0;
+}
+
 static int dw_spi_mmio_probe(struct platform_device *pdev)
 {
 	int (*init_func)(struct platform_device *pdev,
@@ -243,6 +269,12 @@ static int dw_spi_mmio_probe(struct platform_device *pdev)
 	dws->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &mem);
 	if (IS_ERR(dws->regs))
 		return PTR_ERR(dws->regs);
+
+	if (zonhor_spi3_owned_by_rtos(mem)) {
+		dev_info(&pdev->dev,
+			 "SPI3 skipped (cvi.lcd_owner=rtos, FreeRTOS owns LCD)\n");
+		return -ENODEV;
+	}
 
 	dws->paddr = mem->start;
 

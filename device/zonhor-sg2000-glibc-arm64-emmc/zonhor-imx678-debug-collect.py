@@ -50,6 +50,9 @@ SENSOR_CFG_PATHS = [
     "/mnt/system/usr/bin/sensor_cfg.ini",
     "/mnt/data/sensor_cfg.ini",
     "/mnt/system/sensor_cfg.ini.imx678",
+    "/mnt/system/usr/bin/sensor_cfg.ini.imx678_1080p",
+    "/mnt/system/usr/bin/sensor_cfg.ini.imx678_1080p_bin",
+    "/mnt/system/usr/bin/sensor_cfg.ini.imx678_5m",
 ]
 
 DMESG_KEYWORDS = re.compile(
@@ -64,33 +67,37 @@ CVITEK_PROC_GLOBS = [
     "/proc/mipi-rx",
 ]
 
+# Register names match Sony IMX678 / Linux upstream imx678 driver
 IMX678_KEY_REGS = [
     (0x3000, "STANDBY"),
     (0x3002, "XMSTA (master mode start)"),
-    (0x3020, "MIRROR"),
-    (0x3021, "FLIP"),
-    (0x3022, "CHIP_ID"),
-    (0x3008, "BCWAIT_TIME"),
-    (0x3009, "CPWAIT_TIME"),
-    (0x3010, "REGRD_HOLD"),
-    (0x3018, "INCK_SEL"),
-    (0x301A, "DATARATE_SEL"),
-    (0x301C, "WINMODE"),
-    (0x301E, "THIN_V_EN"),
-    (0x3024, "MASTER_MODE"),
-    (0x3028, "HMAX_LSB"),
-    (0x3029, "HMAX_MSB"),
-    (0x302C, "VMAX_LSB"),
-    (0x302D, "VMAX_MSB"),
-    (0x3030, "SHR0_LSB"),
-    (0x3031, "SHR0_MSB"),
-    (0x3034, "GAIN"),
-    (0x3040, "DATAMODE"),
-    (0x3042, "OPB_SIZE_V"),
-    (0x3050, "X_OUT_SIZE_LSB"),
-    (0x3051, "X_OUT_SIZE_MSB"),
-    (0x3054, "Y_OUT_SIZE_LSB"),
-    (0x3055, "Y_OUT_SIZE_MSB"),
+    (0x3014, "INCK_SEL"),
+    (0x3015, "DATARATE_SEL"),
+    (0x3018, "WINMODE"),
+    (0x301A, "WDMODE"),
+    (0x301B, "ADDMODE (0=all-pixel, 1=2x2 bin)"),
+    (0x301C, "THIN_V_EN"),
+    (0x301E, "VCMODE"),
+    (0x3020, "HREVERSE"),
+    (0x3021, "VREVERSE"),
+    (0x3022, "ADBIT (0=10bit, 1=12bit; also used as probe ID)"),
+    (0x3023, "MDBIT (MIPI data bit)"),
+    (0x3028, "VMAX_LSB"),
+    (0x3029, "VMAX_MID"),
+    (0x302A, "VMAX_MSB"),
+    (0x302C, "HMAX_LSB"),
+    (0x302D, "HMAX_MSB"),
+    (0x303C, "PIX_HST_LSB"),
+    (0x303D, "PIX_HST_MSB"),
+    (0x303E, "PIX_HWIDTH_LSB"),
+    (0x303F, "PIX_HWIDTH_MSB"),
+    (0x3044, "PIX_VST_LSB"),
+    (0x3045, "PIX_VST_MSB"),
+    (0x3046, "PIX_VWIDTH_LSB"),
+    (0x3047, "PIX_VWIDTH_MSB"),
+    (0x3050, "SHR0_LSB"),
+    (0x3051, "SHR0_MID"),
+    (0x3052, "SHR0_MSB"),
 ]
 
 
@@ -390,16 +397,54 @@ class Collector(object):
         self.subsection("Key IMX678 registers")
         self.writeln("%-8s  %-6s  %s" % ("Address", "Value", "Name"))
         self.writeln("%-8s  %-6s  %s" % ("-" * 8, "-" * 6, "-" * 24))
+        regs = {}
         for reg, name in IMX678_KEY_REGS:
             val, err = self.i2c_read_reg(IMX678_I2C_BUS, IMX678_I2C_ADDR, reg)
             if err:
                 self.writeln("0x%04X    ERROR   %s  (%s)" % (reg, name, err))
             else:
+                regs[reg] = val & 0xFF
                 self.writeln("0x%04X    0x%02X    %s" % (reg, val & 0xFF, name))
+
+        self.subsection("Decoded mode / window (crop vs 2x2 bin)")
+        need = [0x3018, 0x301B, 0x3022, 0x303C, 0x303D, 0x303E, 0x303F,
+                0x3044, 0x3045, 0x3046, 0x3047]
+        if all(r in regs for r in need):
+            addmode = regs[0x301B]
+            winmode = regs[0x3018]
+            adbit = regs[0x3022]
+            pix_hst = regs[0x303C] | (regs[0x303D] << 8)
+            pix_hw = regs[0x303E] | (regs[0x303F] << 8)
+            pix_vst = regs[0x3044] | (regs[0x3045] << 8)
+            pix_vw = regs[0x3046] | (regs[0x3047] << 8)
+            self.writeln("ADDMODE=%d WINMODE=%d ADBIT=%d" % (addmode, winmode, adbit))
+            self.writeln("PIX window: HST=%d HWIDTH=%d VST=%d VWIDTH=%d" % (
+                pix_hst, pix_hw, pix_vst, pix_vw))
+            if addmode == 1 and pix_hw == 3840 and pix_vw == 2160:
+                self.writeln(
+                    "Heuristic: 2x2 BINNING (expect MIPI ~1920x1080 RAW10, full FOV)"
+                )
+            elif pix_hw == 1920 and pix_vw == 1080 and addmode == 0:
+                self.writeln(
+                    "Heuristic: 1080p CENTER CROP (MIPI still ~3856x2180 RAW12)"
+                )
+            elif pix_hw == 2880 and pix_vw == 1620 and addmode == 0:
+                self.writeln(
+                    "Heuristic: 5MP CENTER CROP (MIPI still ~3856x2180 RAW12)"
+                )
+            else:
+                self.writeln("Heuristic: unknown / custom window")
+            self.writeln(
+                "Note: check /proc/cvitek/mipi-rx for actual CSIBDG frame size "
+                "(crop keeps 3856x2180; bin should drop to ~1920x1080)."
+            )
+        else:
+            self.note("Skip decode: incomplete register read")
 
         if shutil.which("i2cget"):
             self.subsection("i2cget cross-check (if available)")
-            for reg, name in [(IMX678_CHIP_ID_REG, "CHIP_ID"), (0x3000, "STANDBY"), (0x3002, "XMSTA")]:
+            for reg, name in [(IMX678_CHIP_ID_REG, "ADBIT/CHIP_ID"), (0x3000, "STANDBY"),
+                              (0x3002, "XMSTA"), (0x301B, "ADDMODE")]:
                 cmd = "i2cget -y %d 0x%02x 0x%04x b 2>/dev/null || true" % (
                     IMX678_I2C_BUS, IMX678_I2C_ADDR, reg,
                 )

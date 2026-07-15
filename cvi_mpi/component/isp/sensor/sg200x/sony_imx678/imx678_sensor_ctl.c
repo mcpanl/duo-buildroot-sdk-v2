@@ -632,10 +632,51 @@ static void imx678_apply_1080p_crop(VI_PIPE ViPipe)
 	imx678_write_register(ViPipe, 0x3047, 0x04);
 }
 
+/*
+ * 2x2 hardware binning -> MIPI ~1920x1080, full FOV.
+ * Logic from Linux upstream imx678_program_window():
+ *   ADDMODE=1, WINMODE=4 when crop != full active (3856x2180),
+ *   PIX window = 3840x2160 centered, ADBIT=0 (10-bit AD for binning).
+ */
+static void imx678_apply_1080p_binning(VI_PIPE ViPipe)
+{
+	imx678_write_register(ViPipe, 0x301B, 0x01); /* ADDMODE = 2x2 binning */
+	imx678_write_register(ViPipe, 0x3018, 0x04); /* WINMODE = window crop */
+	imx678_write_register(ViPipe, 0x303C, 0x08); /* PIX_HST = 8 */
+	imx678_write_register(ViPipe, 0x303D, 0x00);
+	imx678_write_register(ViPipe, 0x303E, 0x00); /* PIX_HWIDTH = 3840 */
+	imx678_write_register(ViPipe, 0x303F, 0x0F);
+	imx678_write_register(ViPipe, 0x3044, 0x08); /* PIX_VST = 8 */
+	imx678_write_register(ViPipe, 0x3045, 0x00);
+	imx678_write_register(ViPipe, 0x3046, 0x70); /* PIX_VWIDTH = 2160 */
+	imx678_write_register(ViPipe, 0x3047, 0x08);
+	imx678_write_register(ViPipe, 0x3022, 0x00); /* ADBIT = 10-bit */
+	imx678_write_register(ViPipe, 0x3023, 0x00); /* MDBIT = 10-bit MIPI */
+	imx678_write_register(ViPipe, 0x301C, 0x00); /* THIN_V_EN = off */
+}
+
+/* Linux upstream stream-on for binning: STANDBY clear -> delay -> XMSTA start */
+static void imx678_stream_on_binning(VI_PIPE ViPipe)
+{
+	imx678_write_register(ViPipe, 0x3000, 0x00);
+	delay_ms(25);
+	imx678_write_register(ViPipe, 0x3002, 0x00);
+}
+
+/* Proven CVITEK stream-on used by 4K/crop modes on SG2000 */
+static void imx678_stream_on_cvitek(VI_PIPE ViPipe)
+{
+	imx678_write_register(ViPipe, 0x3002, 0x01);
+	imx678_write_register(ViPipe, 0x3000, 0x00);
+	delay_ms(80);
+	imx678_write_register(ViPipe, 0x3002, 0x00);
+}
+
 void imx678_init(VI_PIPE ViPipe)
 {
 	CVI_U8 u8ImgMode;
 	int standby, xmsta, hmax, vmax, pix_w, pix_h;
+	int addmode, adbit, winmode;
 
 	delay_ms(1);
 	if (imx678_i2c_init(ViPipe) != CVI_SUCCESS)
@@ -650,11 +691,13 @@ void imx678_init(VI_PIPE ViPipe)
 		imx678_apply_5m_crop(ViPipe);
 	else if (u8ImgMode == IMX678_MODE_2M30)
 		imx678_apply_1080p_crop(ViPipe);
+	else if (u8ImgMode == IMX678_MODE_2M30_BIN)
+		imx678_apply_1080p_binning(ViPipe);
 
-	imx678_write_register(ViPipe, 0x3002, 0x01);
-	imx678_write_register(ViPipe, 0x3000, 0x00);
-	delay_ms(80);
-	imx678_write_register(ViPipe, 0x3002, 0x00);
+	if (u8ImgMode == IMX678_MODE_2M30_BIN)
+		imx678_stream_on_binning(ViPipe);
+	else
+		imx678_stream_on_cvitek(ViPipe);
 
 	standby = imx678_read_register(ViPipe, 0x3000);
 	xmsta = imx678_read_register(ViPipe, 0x3002);
@@ -662,8 +705,17 @@ void imx678_init(VI_PIPE ViPipe)
 	vmax = imx678_read_register(ViPipe, 0x3028) | (imx678_read_register(ViPipe, 0x3029) << 8);
 	pix_w = imx678_read_register(ViPipe, 0x303E) | (imx678_read_register(ViPipe, 0x303F) << 8);
 	pix_h = imx678_read_register(ViPipe, 0x3046) | (imx678_read_register(ViPipe, 0x3047) << 8);
+	addmode = imx678_read_register(ViPipe, 0x301B);
+	adbit = imx678_read_register(ViPipe, 0x3022);
+	winmode = imx678_read_register(ViPipe, 0x3018);
 
-	if (u8ImgMode == IMX678_MODE_2M30)
+	if (u8ImgMode == IMX678_MODE_2M30_BIN)
+		printf("ViPipe:%d,===IMX678 1080P30fps 10bit LINE(bin) Init OK!=== "
+		       "STBY=%#x XMSTA=%#x HMAX=%d VMAX=%d PIX=%dx%d "
+		       "ADDMODE=%#x WINMODE=%#x ADBIT=%#x\n",
+		       ViPipe, standby & 0xff, xmsta & 0xff, hmax, vmax, pix_w, pix_h,
+		       addmode & 0xff, winmode & 0xff, adbit & 0xff);
+	else if (u8ImgMode == IMX678_MODE_2M30)
 		printf("ViPipe:%d,===IMX678 1080P30fps 12bit LINE(crop) Init OK!=== "
 		       "STBY=%#x XMSTA=%#x HMAX=%d VMAX=%d PIX=%dx%d\n",
 		       ViPipe, standby & 0xff, xmsta & 0xff, hmax, vmax, pix_w, pix_h);

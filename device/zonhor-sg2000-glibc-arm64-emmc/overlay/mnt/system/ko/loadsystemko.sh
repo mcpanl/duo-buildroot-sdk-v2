@@ -21,6 +21,11 @@ fi
 
 insmod /mnt/system/ko/cv181x_rtos_cmdqu.ko
 insmod /mnt/system/ko/cv181x_fast_image.ko
+# LCD proxy: /dev/fb0 when cvi.lcd_owner=rtos (default). Harmless no-op if module
+# refuses probe under cvi.lcd_owner=linux.
+if [ -f /mnt/system/ko/cv181x_zonhor_lcd_proxy.ko ]; then
+	insmod /mnt/system/ko/cv181x_zonhor_lcd_proxy.ko || true
+fi
 insmod /mnt/system/ko/cvi_mipi_rx.ko
 insmod /mnt/system/ko/snsr_i2c.ko
 insmod /mnt/system/ko/cv181x_vi.ko

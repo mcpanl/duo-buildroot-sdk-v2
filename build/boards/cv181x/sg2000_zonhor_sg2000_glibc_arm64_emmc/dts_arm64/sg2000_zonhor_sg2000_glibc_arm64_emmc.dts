@@ -48,6 +48,24 @@
 		beeper-hz = <4000>;
 		amp-supply = <&buzzer_amp>;
 	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		display_shm_reserved: display-shm@95300000 {
+			compatible = "shared-dma-pool";
+			reg = <0x0 CVIMMAP_DISPLAY_SHM_ADDR 0x0 CVIMMAP_DISPLAY_SHM_SIZE>;
+			no-map;
+		};
+	};
+
+	zonhor_lcd_proxy: zonhor-lcd-proxy {
+		compatible = "cvitek,zonhor-lcd-proxy";
+		memory-region = <&display_shm_reserved>;
+		status = "okay";
+	};
 };
 
 &{/aliases} {

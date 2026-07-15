@@ -1,0 +1,61 @@
+#!/bin/sh
+# Zonhor RTOS LCD validation helpers (run on target after flash).
+# Usage: zonhor-lcd-check [status|fill|switch-rtos|switch-linux]
+
+set -eu
+
+cmd=${1:-status}
+
+case "$cmd" in
+status)
+	echo "=== cmdline ==="
+	tr '\0' '\n' </proc/cmdline | tr ' ' '\n' | grep -E 'cvi.lcd_owner|root=' || true
+	echo "=== lcd_owner env ==="
+	fw_printenv -n lcd_owner 2>/dev/null || echo "(unset, default rtos)"
+	echo "=== fb0 ==="
+	if [ -e /dev/fb0 ]; then
+		fbset -i 2>/dev/null || ls -l /dev/fb0
+	else
+		echo "MISSING /dev/fb0"
+	fi
+	echo "=== proxy shm status ==="
+	cat /sys/devices/platform/zonhor-lcd-proxy/status 2>/dev/null || \
+		cat /sys/bus/platform/devices/zonhor-lcd-proxy/status 2>/dev/null || \
+		echo "(status sysfs missing)"
+	echo "=== modules / dmesg ==="
+	lsmod | grep -E 'zonhor_lcd|fb_jd9853|rtos_cmdqu|spi_dw' || true
+	dmesg | grep -Ei 'zonhor lcd|fb_jd9853|SPI3 skipped|display_shm|lcd_owner|linux_ready|self-test' | tail -30
+	;;
+fill)
+	# Write solid blue RGB565 into /dev/fb0 (110080 bytes)
+	python3 - <<'PY'
+import os, struct, time
+W,H=172,320
+color=0x001F  # blue
+path="/dev/fb0"
+data=struct.pack("<H", color)*(W*H)
+fd=os.open(path, os.O_RDWR)
+os.write(fd, data)
+os.close(fd)
+print("wrote blue fill to", path)
+time.sleep(0.2)
+PY
+	# Force another submit via sysfs if available
+	echo 1 > /sys/devices/platform/zonhor-lcd-proxy/flush 2>/dev/null || \
+		echo 1 > /sys/bus/platform/devices/zonhor-lcd-proxy/flush 2>/dev/null || true
+	cat /sys/devices/platform/zonhor-lcd-proxy/status 2>/dev/null || \
+		cat /sys/bus/platform/devices/zonhor-lcd-proxy/status 2>/dev/null || true
+	;;
+switch-rtos)
+	fw_setenv lcd_owner rtos
+	echo "lcd_owner=rtos set; reboot to apply"
+	;;
+switch-linux)
+	fw_setenv lcd_owner linux
+	echo "lcd_owner=linux set; reboot to apply"
+	;;
+*)
+	echo "Usage: $0 [status|fill|switch-rtos|switch-linux]"
+	exit 1
+	;;
+esac

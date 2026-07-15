@@ -273,6 +273,7 @@
 		"mtdids=" MTDIDS_DEFAULT "\0" \
 		"root=" ROOTARGS "\0" \
 		"sdboot=" SD_BOOTM_COMMAND "\0" \
+		"lcd_owner=rtos\0" \
 		"othbootargs=" OTHERBOOTARGS "\0" \
 		PARTS_OFFSET
 
@@ -313,7 +314,7 @@
 	#endif
 
 	#define SET_BOOTARGS "setenv bootargs ${reserved_mem} ${root} ${mtdparts} " \
-					"console=$consoledev,$baudrate $othbootargs;"
+					"console=$consoledev,$baudrate $othbootargs cvi.lcd_owner=${lcd_owner};"
 
 	#define SD_BOOTM_COMMAND \
 				SET_BOOTARGS \

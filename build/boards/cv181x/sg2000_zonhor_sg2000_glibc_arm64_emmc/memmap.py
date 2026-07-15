@@ -56,12 +56,16 @@ class MemoryMap:
 
     assert ISP_MEM_BASE_ADDR + ISP_MEM_BASE_SIZE <= ION_ADDR + ION_SIZE
 
-    # Boot logo is after the ION buffer
-    # Framebuffer uses boot logo's reserved memory
-    BOOTLOGO_SIZE = 8000 * SIZE_1K
-    BOOTLOGO_ADDR = ION_ADDR - BOOTLOGO_SIZE
+    # Boot logo + LCD display shared memory (Linux fb proxy <-> RTOS SPI)
+    # Keep total carveout before ION at 8000 KiB (same as previous BOOTLOGO-only).
+    DISPLAY_SHM_SIZE = 1 * SIZE_1M
+    BOOTLOGO_SIZE = 8000 * SIZE_1K - DISPLAY_SHM_SIZE
+    BOOTLOGO_ADDR = ION_ADDR - BOOTLOGO_SIZE - DISPLAY_SHM_SIZE
     FRAMEBUFFER_SIZE = BOOTLOGO_SIZE
     FRAMEBUFFER_ADDR = BOOTLOGO_ADDR
+    DISPLAY_SHM_ADDR = BOOTLOGO_ADDR + BOOTLOGO_SIZE
+    assert BOOTLOGO_SIZE + DISPLAY_SHM_SIZE == 8000 * SIZE_1K
+    assert BOOTLOGO_ADDR + BOOTLOGO_SIZE + DISPLAY_SHM_SIZE == ION_ADDR
 
     # ===================
     # FSBL and u-boot-2021

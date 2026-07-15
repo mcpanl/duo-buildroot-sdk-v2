@@ -51,6 +51,26 @@ static const IMX678_MODE_S g_astImx678_mode[IMX678_MODE_NUM] = {
 		.stAgain[0] = { .u16Min = 1024, .u16Max = 32381, .u16Def = 1024, .u16Step = 1 },
 		.stDgain[0] = { .u16Min = 1024, .u16Max = 65535, .u16Def = 1024, .u16Step = 1 },
 	},
+	[IMX678_MODE_2M30_BIN] = {
+		.name = "1080P30_BIN",
+		.astImg[0] = {
+			/*
+			 * 2x2 hardware binning: sensor PIX window 3840x2160 with ADDMODE=1
+			 * yields MIPI ~1920x1080 RAW10 (full FOV). Adjust stSnsSize if
+			 * mipi-rx reports padding (e.g. 1936x1088).
+			 */
+			.stSnsSize = { .u32Width = 1920, .u32Height = 1080 },
+			.stWndRect = { .s32X = 0, .s32Y = 0, .u32Width = 1920, .u32Height = 1080 },
+			.stMaxSize = { .u32Width = 1920, .u32Height = 1080 },
+		},
+		.f32MaxFps = 30,
+		.f32MinFps = 0.01,
+		.u32HtsDef = 1100,
+		.u32VtsDef = 2250,
+		.stExp[0] = { .u16Min = 4, .u16Max = 2249, .u16Def = 400, .u16Step = 1 },
+		.stAgain[0] = { .u16Min = 1024, .u16Max = 32381, .u16Def = 1024, .u16Step = 1 },
+		.stDgain[0] = { .u16Min = 1024, .u16Max = 65535, .u16Def = 1024, .u16Step = 1 },
+	},
 };
 
 static ISP_CMOS_BLACK_LEVEL_S g_stIspBlcCalibratio = {

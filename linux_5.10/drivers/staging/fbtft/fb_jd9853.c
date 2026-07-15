@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/delay.h>
+#include <linux/string.h>
 #include <video/mipi_display.h>
 
 #include "fbtft.h"
@@ -165,12 +166,64 @@ static struct fbtft_display display = {
 	},
 };
 
-FBTFT_REGISTER_DRIVER(DRVNAME, "jadard,jd9853", &display);
+/* Default owner is RTOS (SPI owned by C906L). Only probe when linux owns SPI. */
+static bool zonhor_lcd_owner_is_linux(void)
+{
+	const char *s = strstr(saved_command_line, "cvi.lcd_owner=");
+
+	if (!s)
+		return false;
+	s += strlen("cvi.lcd_owner=");
+	return strncmp(s, "linux", 5) == 0;
+}
+
+static int fbtft_driver_probe_spi(struct spi_device *spi)
+{
+	if (!zonhor_lcd_owner_is_linux()) {
+		dev_info(&spi->dev,
+			 "fb_jd9853 skipped (cvi.lcd_owner!=linux, RTOS owns SPI)\n");
+		return -ENODEV;
+	}
+	return fbtft_probe_common(&display, spi, NULL);
+}
+
+static int fbtft_driver_remove_spi(struct spi_device *spi)
+{
+	struct fb_info *info = spi_get_drvdata(spi);
+
+	return fbtft_remove_common(&spi->dev, info);
+}
+
+static const struct of_device_id dt_ids[] = {
+	{ .compatible = "jadard,jd9853" },
+	{},
+};
+MODULE_DEVICE_TABLE(of, dt_ids);
+
+static struct spi_driver fbtft_driver_spi_driver = {
+	.driver = {
+		.name   = DRVNAME,
+		.of_match_table = of_match_ptr(dt_ids),
+	},
+	.probe  = fbtft_driver_probe_spi,
+	.remove = fbtft_driver_remove_spi,
+};
+
+static int __init fbtft_driver_module_init(void)
+{
+	return spi_register_driver(&fbtft_driver_spi_driver);
+}
+
+static void __exit fbtft_driver_module_exit(void)
+{
+	spi_unregister_driver(&fbtft_driver_spi_driver);
+}
+
+module_init(fbtft_driver_module_init);
+module_exit(fbtft_driver_module_exit);
 
 MODULE_ALIAS("spi:" DRVNAME);
-MODULE_ALIAS("platform:" DRVNAME);
 MODULE_ALIAS("spi:jd9853");
-MODULE_ALIAS("platform:jd9853");
 
 MODULE_DESCRIPTION("FB driver for the JD9853 LCD display controller");
 MODULE_AUTHOR("Christian Vogelgsang");

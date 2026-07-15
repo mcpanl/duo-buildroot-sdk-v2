@@ -14,6 +14,7 @@ extern void prvVIRunTask(void *pvParameters);
 extern void prvRGNRunTask(void *pvParameters);
 extern void prvAudioRunTask(void *pvParameters);
 extern void prvCameraRunTask(void *pvParameters);
+extern void prvDisplayRunTask(void *pvParameters);
 
 QueueHandle_t main_GetMODHandle(QUEUE_HANDLE_E handle_idx);
 

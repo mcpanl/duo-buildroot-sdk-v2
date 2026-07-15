@@ -16,6 +16,7 @@
 #include "fb_lcd.h"
 #include "rgb888_rgb565.h"
 #include "perf_stats.h"
+#include "yuv_snapshot.h"
 
 #define VPSS_ALIGN 64
 #define VPSS_ALIGN_UP(x) ((((x) + VPSS_ALIGN - 1) / VPSS_ALIGN) * VPSS_ALIGN)
@@ -143,7 +144,7 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 	stVbConf.astCommPool[0].u32BlkCnt = 5;
 	stVbConf.astCommPool[0].enRemapMode = VB_REMAP_MODE_CACHED;
 	stVbConf.astCommPool[1].u32BlkSize = u32Nv21Blk;
-	stVbConf.astCommPool[1].u32BlkCnt = 4;
+	stVbConf.astCommPool[1].u32BlkCnt = 5;
 	stVbConf.astCommPool[1].enRemapMode = VB_REMAP_MODE_CACHED;
 	stVbConf.astCommPool[2].u32BlkSize = u32RgbBlk;
 	stVbConf.astCommPool[2].u32BlkCnt = 4;
@@ -209,7 +210,7 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 	astVpssChnAttr[VpssChn].enPixelFormat = SAMPLE_PIXEL_FORMAT;
 	astVpssChnAttr[VpssChn].stFrameRate.s32SrcFrameRate = -1;
 	astVpssChnAttr[VpssChn].stFrameRate.s32DstFrameRate = -1;
-	astVpssChnAttr[VpssChn].u32Depth = 0; /* bound to Grp1 */
+	astVpssChnAttr[VpssChn].u32Depth = 1; /* bound to Grp1 + YUV snapshot */
 	astVpssChnAttr[VpssChn].bMirror = mirror;
 	astVpssChnAttr[VpssChn].bFlip = flip;
 	astVpssChnAttr[VpssChn].stAspectRatio.enMode = ASPECT_RATIO_AUTO;
@@ -446,6 +447,7 @@ int main(int argc, char **argv)
 
 	usleep(500 * 1000);
 	perf_timespec_now(&perf_report_start);
+	yuv_snapshot_init();
 
 	SAMPLE_PRT("Preview started. Press Ctrl+C to exit.\n");
 	SAMPLE_PRT("Perf stats every %ds (temporary instrumentation).\n",
@@ -511,6 +513,8 @@ int main(int argc, char **argv)
 		perf_timespec_now(&frame_loop_end);
 		perf_record(PERF_FRAME_TOTAL,
 			    perf_elapsed_ns(&frame_loop_start, &frame_loop_end));
+
+		yuv_snapshot_try_save(VPSS_GRP_ROT, VpssChn);
 
 		if (perf_report_due(&perf_report_start, PERF_REPORT_INTERVAL_SEC)) {
 			perf_print_report();

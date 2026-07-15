@@ -73,8 +73,9 @@ PIX 裁剪只改变传感器**有效像素窗口**，**不改变 MIPI 帧的 CSI
 
 | 枚举 | 内部模式 | 用途 |
 |------|----------|------|
-| `SONY_IMX678_MIPI_8M_30FPS_12BIT` | `IMX678_MODE_8M30` | 4K 全分辨率（当前 SoC **ISP 后级不通**，仅调试 MIPI/SOF） |
-| `SONY_IMX678_MIPI_2M_30FPS_12BIT` | `IMX678_MODE_2M30` | **1080p 中心裁剪（推荐）** |
+| `SONY_IMX678_MIPI_8M_30FPS_12BIT` | `IMX678_MODE_8M30` | **5MP 中心裁剪** 2880×1620（SG2000 ISP 上限） |
+| `SONY_IMX678_MIPI_2M_30FPS_12BIT` | `IMX678_MODE_2M30` | 1080p 中心裁剪（FOV 缩小，MIPI 仍 4K） |
+| `SONY_IMX678_MIPI_2M_30FPS_10BIT_BIN` | `IMX678_MODE_2M30_BIN` | **1080p 2×2 硬件融合**（全 FOV，RAW10；见 §7） |
 
 ### 3.2 Sensor 侧
 
@@ -199,8 +200,79 @@ i2ctransfer -y 3 w2@0x1a 0x30 0x47 r1   # 0x04
 
 ---
 
-## 7. 修订历史
+## 7. 1080p 2×2 硬件融合模式（并存）
+
+与中心裁剪 1080p **并存**：新增枚举 `SONY_IMX678_MIPI_2M_30FPS_10BIT_BIN` /
+内部 `IMX678_MODE_2M30_BIN`，不改动已验证的 crop 路径。
+
+### 7.1 模式对比
+
+| 项目 | `2M_30FPS_12BIT` (crop) | `2M_30FPS_10BIT_BIN` (bin) |
+|------|-------------------------|----------------------------|
+| 传感器 | PIX 中心裁 1920×1080 | ADDMODE=1，PIX=3840×2160 |
+| FOV | 缩小（中心 1/4） | 全画幅 |
+| MIPI 帧 | 仍 **3856×2180** RAW12 | 期望 **~1920×1080** RAW10 |
+| ISP `stWndRect` | (968,550,1920,1080) | (0,0,1920,1080) |
+| 灵敏度 | 单像素 | 2×2 融合，低光更好 |
+
+### 7.2 关键寄存器（Linux 上游 `imx678_program_window`）
+
+| 寄存器 | 值 | 含义 |
+|--------|-----|------|
+| `0x301B` ADDMODE | `0x01` | 2×2 binning |
+| `0x3018` WINMODE | `0x04` | 窗口模式 |
+| `0x303C/D` PIX_HST | `8` | 居中 (3856−3840)/2 |
+| `0x303E/F` PIX_HWIDTH | `3840` | 融合前宽度 |
+| `0x3044/5` PIX_VST | `8` | 居中 (2180−2160)/2 |
+| `0x3046/7` PIX_VWIDTH | `2160` | 融合前高度 |
+| `0x3022` ADBIT | `0x00` | 10-bit AD |
+| `0x3023` MDBIT | `0x00` | 10-bit MIPI |
+
+模式选择：sample 层 `ISP_PUB_ATTR.u8SnsMode=1` → `cmos_set_image_mode` 选 BIN。
+
+### 7.3 板级启用
+
+```bash
+cp /mnt/system/usr/bin/sensor_cfg.ini.imx678_1080p_bin /mnt/data/sensor_cfg.ini
+# 部署新 libsns_imx678.so / sample 后
+sample_sensor_test   # 或 sample_sensor_lcd
+```
+
+回退裁剪模式：
+
+```bash
+cp /mnt/system/usr/bin/sensor_cfg.ini.imx678_1080p /mnt/data/sensor_cfg.ini
+```
+
+### 7.4 实机验证 checklist（Phase 1–3）
+
+**Phase 1 — Sensor + MIPI**
+
+- [ ] Init 日志含 `1080P30fps 10bit LINE(bin)` 且 `ADDMODE=0x1 ADBIT=0x0 PIX=3840x2160`
+- [ ] I2C：`0x301B=0x01`，`0x303E/F=0x0F00`，`0x3046/7=0x0870`
+- [ ] `/proc/cvitek/mipi-rx` 帧宽约 **1920**、高约 **1080**（非 3856×2180）
+- [ ] 无 `frm width/height greater than setting`
+
+若 MIPI 无数据：仅切换 `imx678_stream_on_binning()` → 改用 `imx678_stream_on_cvitek()`，勿改 ADDMODE/PIX。
+
+**Phase 2 — CSIBDG / ISP**
+
+- [ ] 若实测为 1936×1088 等 padding：改 `stSnsSize` 为实测值，`stWndRect` 保留 1920×1080
+- [ ] `/proc/cvitek/vi`：`RecvPic > 0`，RAW/YUV 有帧
+
+**Phase 3 — 画质**
+
+- [ ] FOV 明显大于 crop 1080p（近似全景）
+- [ ] 低光噪声应优于 crop；细节略软属预期
+- [ ] 亮度/AE：融合增益约 +6dB，必要时收紧 again 或调 BLC
+
+诊断：`python3 zonhor-imx678-debug-collect.py`（已解码 ADDMODE / PIX / crop-vs-bin）。
+
+---
+
+## 8. 修订历史
 
 | 日期 | 内容 |
 |------|------|
 | 2026-07 | 初版：SG2000 移植踩坑、1080p 裁剪定稿、8MP 后续方向 |
+| 2026-07 | 新增 1080p 2×2 硬件融合并存路径（`2M_30FPS_10BIT_BIN`） |

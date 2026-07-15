@@ -397,9 +397,13 @@ static CVI_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S 
 		return CVI_FAILURE;
 	}
 
-	if (IMX678_RES_IS_2M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height))
-		u8SensorImageMode = IMX678_MODE_2M30;
-	else if (IMX678_RES_IS_5M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height) ||
+	if (IMX678_RES_IS_2M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height)) {
+		/* u8SnsMode: 0 = crop (default), 1 = 2x2 binning (from sample/isp attr) */
+		if (pstSensorImageMode->u8SnsMode == 1)
+			u8SensorImageMode = IMX678_MODE_2M30_BIN;
+		else
+			u8SensorImageMode = IMX678_MODE_2M30;
+	} else if (IMX678_RES_IS_5M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height) ||
 		 IMX678_RES_IS_8M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height))
 		u8SensorImageMode = IMX678_MODE_8M30;
 	else {
@@ -484,6 +488,9 @@ static CVI_S32 sensor_rx_attr(VI_PIPE ViPipe, SNS_COMBO_DEV_ATTR_S *pstRxAttr)
 	pstRxAttr->img_size.width = g_astImx678_mode[pstSnsState->u8ImgMode].astImg[0].stSnsSize.u32Width;
 	pstRxAttr->img_size.height = g_astImx678_mode[pstSnsState->u8ImgMode].astImg[0].stSnsSize.u32Height;
 	pstRxAttr->mipi_attr.wdr_mode = CVI_MIPI_WDR_MODE_NONE;
+	/* 2x2 binning uses 10-bit AD/MIPI per Sony/Linux upstream convention */
+	if (pstSnsState->u8ImgMode == IMX678_MODE_2M30_BIN)
+		pstRxAttr->mipi_attr.raw_data_type = RAW_DATA_10BIT;
 	return CVI_SUCCESS;
 }
 

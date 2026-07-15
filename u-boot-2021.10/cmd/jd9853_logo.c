@@ -15,12 +15,16 @@
 #include <dm.h>
 #include <dm/device.h>
 #include <dm/ofnode.h>
+#include <env.h>
 #include <errno.h>
 #include <spi.h>
 #include <asm/gpio.h>
 #include <linux/delay.h>
 #include <linux/bitops.h>
 #include <asm/byteorder.h>
+#include <cpu_func.h>
+#include <cvi_board_memmap.h>
+#include <display_shm.h>
 
 #define JD9853_WIDTH		172
 #define JD9853_HEIGHT		320
@@ -527,6 +531,26 @@ static int jd9853_open(struct jd9853_priv *priv, bool force_reinit)
 	return 0;
 }
 
+static void jd9853_init_display_shm(void)
+{
+	struct display_shm *shm = (struct display_shm *)(uintptr_t)CVIMMAP_DISPLAY_SHM_ADDR;
+	const char *owner = env_get("lcd_owner");
+	uint8_t owner_id = DISPLAY_OWNER_RTOS;
+
+	if (owner && !strcmp(owner, "linux"))
+		owner_id = DISPLAY_OWNER_LINUX;
+
+	memset(shm, 0, sizeof(*shm));
+	shm->magic = DISPLAY_SHM_MAGIC;
+	shm->version = DISPLAY_SHM_VERSION;
+	shm->owner = owner_id;
+	shm->bl_on = 1;
+	flush_dcache_range((unsigned long)shm, sizeof(*shm));
+	printf("jd9853: display_shm @ 0x%x owner=%s\n",
+	       CVIMMAP_DISPLAY_SHM_ADDR,
+	       owner_id == DISPLAY_OWNER_LINUX ? "linux" : "rtos");
+}
+
 static int do_jd9853_logo(struct cmd_tbl *cmdtp, int flag, int argc,
 			  char *const argv[])
 {
@@ -546,6 +570,7 @@ static int do_jd9853_logo(struct cmd_tbl *cmdtp, int flag, int argc,
 	dm_gpio_set_value(&jd9853.gpio_bl, 1);
 	printf("jd9853_logo: backlight on, logical=%d\n",
 	       dm_gpio_get_value(&jd9853.gpio_bl));
+	jd9853_init_display_shm();
 	printf("jd9853_logo: done (%dx%d)\n", JD9853_WIDTH, JD9853_HEIGHT);
 
 	return CMD_RET_SUCCESS;

@@ -106,6 +106,14 @@ TASK_CTX_S gTaskCtx[E_QUEUE_MAX] = {
 		.queLength = 10,
 		.queHandle = NULL,
 	},
+	{
+		.name = "DISPLAY",
+		.stack_size = configMINIMAL_STACK_SIZE * 8,
+		.priority = tskIDLE_PRIORITY + 4,
+		.runTask = prvDisplayRunTask,
+		.queLength = 8,
+		.queHandle = NULL,
+	},
 };
 
 volatile struct mailbox_set_register *mbox_reg;
@@ -389,6 +397,9 @@ void prvQueueISR(void)
 						break;
 					case IP_CAMERA:
 						xQueueSendFromISR(gTaskCtx[E_QUEUE_CAMERA].queHandle, &rtos_cmdq, &YieldRequired);
+						break;
+					case IP_DISPLAY:
+						xQueueSendFromISR(gTaskCtx[E_QUEUE_DISPLAY].queHandle, &rtos_cmdq, &YieldRequired);
 						break;
 					default:
 						printf("unknown ip_id =%d cmd_id=%d\n", rtos_cmdq.ip_id, rtos_cmdq.cmd_id);

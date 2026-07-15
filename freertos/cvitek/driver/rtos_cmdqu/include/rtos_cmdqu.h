@@ -18,6 +18,7 @@ enum IP_TYPE {
 	IP_AUDIO,
 	IP_SYSTEM,
 	IP_CAMERA,
+	IP_DISPLAY,
 	IP_LIMIT,
 };
 

@@ -29,8 +29,9 @@ enum imx678_linear_regs_e {
 };
 
 typedef enum _IMX678_MODE_E {
-	IMX678_MODE_8M30 = 0,
-	IMX678_MODE_2M30,
+	IMX678_MODE_8M30 = 0,	/* 5MP center crop from 4K */
+	IMX678_MODE_2M30,	/* 1080p center crop (FOV shrunk) */
+	IMX678_MODE_2M30_BIN,	/* 1080p 2x2 hardware binning (full FOV) */
 	IMX678_MODE_NUM
 } IMX678_MODE_E;
 

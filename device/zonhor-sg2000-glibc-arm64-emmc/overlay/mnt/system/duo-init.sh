@@ -55,3 +55,11 @@ fi
 if [ -x /usr/sbin/zonhor-lcd-bl-pad ]; then
 	/usr/sbin/zonhor-lcd-bl-pad pulldown >/tmp/lcd-bl-pad.log 2>&1 || true
 fi
+
+LCD_OWNER=$(fw_printenv -n lcd_owner 2>/dev/null || echo rtos)
+echo "zonhor: lcd_owner=${LCD_OWNER}" >/tmp/lcd_owner.log
+if [ -e /dev/fb0 ]; then
+	echo "zonhor: /dev/fb0 present" >>/tmp/lcd_owner.log
+else
+	echo "zonhor: /dev/fb0 missing" >>/tmp/lcd_owner.log
+fi
