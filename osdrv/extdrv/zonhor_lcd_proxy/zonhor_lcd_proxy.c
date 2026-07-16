@@ -64,6 +64,33 @@ static bool zonhor_lcd_owner_is_rtos(void)
 	return strncmp(s, "linux", 5) != 0;
 }
 
+static int zonhor_mirror_bootarg(const char *name, int defval)
+{
+	const char *bootargs = zonhor_get_bootargs();
+	const char *s;
+
+	if (!bootargs)
+		return defval;
+	s = strstr(bootargs, name);
+	if (!s)
+		return defval;
+	s += strlen(name);
+	return (*s == '1') ? 1 : 0;
+}
+
+static void zonhor_lcd_mirror_apply_rtos(struct zonhor_lcd *lcd)
+{
+	cmdqu_t cmdq = { 0 };
+
+	if (!lcd || !lcd->shm)
+		return;
+
+	cmdq.ip_id = IP_DISPLAY;
+	cmdq.cmd_id = DISPLAY_CMD_MIRROR;
+	cmdq.resv.valid.linux_valid = 1;
+	(void)rtos_cmdqu_send(&cmdq);
+}
+
 static void zonhor_lcd_submit(struct zonhor_lcd *lcd)
 {
 	cmdqu_t cmdq = { 0 };
@@ -152,9 +179,11 @@ static ssize_t status_show(struct device *dev, struct device_attribute *attr,
 
 	return sysfs_emit(buf,
 		"magic=0x%08x owner=%u linux_ready=%u rtos_ready=%u\n"
+		"mirror_x=%u mirror_y=%u\n"
 		"dirty=%u write_idx=%u frame_seq=%u te_sync_cnt=%u\n",
 		lcd->shm->magic, lcd->shm->owner, lcd->shm->linux_ready,
-		lcd->shm->rtos_ready, lcd->shm->dirty, lcd->shm->write_idx,
+		lcd->shm->rtos_ready, lcd->shm->mirror_x, lcd->shm->mirror_y,
+		lcd->shm->dirty, lcd->shm->write_idx,
 		lcd->shm->frame_seq, lcd->shm->te_sync_cnt);
 }
 static DEVICE_ATTR_RO(status);
@@ -172,6 +201,60 @@ static ssize_t flush_store(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 static DEVICE_ATTR_WO(flush);
+
+static ssize_t mirror_x_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	struct zonhor_lcd *lcd = g_lcd;
+
+	if (!lcd || !lcd->shm)
+		return sysfs_emit(buf, "0\n");
+	return sysfs_emit(buf, "%u\n", lcd->shm->mirror_x);
+}
+
+static ssize_t mirror_x_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	struct zonhor_lcd *lcd = g_lcd;
+	unsigned int v;
+
+	if (!lcd || !lcd->shm)
+		return -ENODEV;
+	if (kstrtouint(buf, 10, &v))
+		return -EINVAL;
+	lcd->shm->mirror_x = v ? 1 : 0;
+	wmb();
+	zonhor_lcd_mirror_apply_rtos(lcd);
+	return count;
+}
+static DEVICE_ATTR_RW(mirror_x);
+
+static ssize_t mirror_y_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	struct zonhor_lcd *lcd = g_lcd;
+
+	if (!lcd || !lcd->shm)
+		return sysfs_emit(buf, "0\n");
+	return sysfs_emit(buf, "%u\n", lcd->shm->mirror_y);
+}
+
+static ssize_t mirror_y_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	struct zonhor_lcd *lcd = g_lcd;
+	unsigned int v;
+
+	if (!lcd || !lcd->shm)
+		return -ENODEV;
+	if (kstrtouint(buf, 10, &v))
+		return -EINVAL;
+	lcd->shm->mirror_y = v ? 1 : 0;
+	wmb();
+	zonhor_lcd_mirror_apply_rtos(lcd);
+	return count;
+}
+static DEVICE_ATTR_RW(mirror_y);
 
 static int zonhor_lcd_probe(struct platform_device *pdev)
 {
@@ -220,8 +303,19 @@ static int zonhor_lcd_probe(struct platform_device *pdev)
 		lcd->shm->version = DISPLAY_SHM_VERSION;
 		lcd->shm->owner = DISPLAY_OWNER_RTOS;
 		lcd->shm->bl_on = 1;
+		lcd->shm->mirror_x = zonhor_mirror_bootarg("cvi.lcd_mirror_x=",
+							   LCD_MIRROR_X_DEFAULT);
+		lcd->shm->mirror_y = zonhor_mirror_bootarg("cvi.lcd_mirror_y=",
+							   LCD_MIRROR_Y_DEFAULT);
 	} else {
 		lcd->shm->owner = DISPLAY_OWNER_RTOS;
+		if (lcd->shm->version < DISPLAY_SHM_VERSION) {
+			lcd->shm->mirror_x = zonhor_mirror_bootarg(
+				"cvi.lcd_mirror_x=", LCD_MIRROR_X_DEFAULT);
+			lcd->shm->mirror_y = zonhor_mirror_bootarg(
+				"cvi.lcd_mirror_y=", LCD_MIRROR_Y_DEFAULT);
+			lcd->shm->version = DISPLAY_SHM_VERSION;
+		}
 	}
 
 	/*
@@ -230,7 +324,8 @@ static int zonhor_lcd_probe(struct platform_device *pdev)
 	 */
 	lcd->shm->linux_ready = 1;
 	wmb();
-	dev_info(dev, "linux_ready=1, waiting for RTOS SPI bring-up\n");
+	dev_info(dev, "linux_ready=1, mirror=%u,%u, waiting for RTOS SPI\n",
+		 lcd->shm->mirror_x, lcd->shm->mirror_y);
 
 	lcd->vmem = vzalloc(DISPLAY_FRAME_BYTES);
 	if (!lcd->vmem) {
@@ -288,6 +383,8 @@ static int zonhor_lcd_probe(struct platform_device *pdev)
 
 	device_create_file(dev, &dev_attr_status);
 	device_create_file(dev, &dev_attr_flush);
+	device_create_file(dev, &dev_attr_mirror_x);
+	device_create_file(dev, &dev_attr_mirror_y);
 
 	platform_set_drvdata(pdev, lcd);
 	g_lcd = lcd;
@@ -305,6 +402,8 @@ static int zonhor_lcd_remove(struct platform_device *pdev)
 		return 0;
 	device_remove_file(&pdev->dev, &dev_attr_status);
 	device_remove_file(&pdev->dev, &dev_attr_flush);
+	device_remove_file(&pdev->dev, &dev_attr_mirror_x);
+	device_remove_file(&pdev->dev, &dev_attr_mirror_y);
 	g_lcd = NULL;
 	unregister_framebuffer(lcd->info);
 	fb_deferred_io_cleanup(lcd->info);

@@ -13,7 +13,11 @@
 #endif
 
 #define DISPLAY_SHM_MAGIC		0x5A4C4344u	/* 'ZLCD' */
-#define DISPLAY_SHM_VERSION		1
+#define DISPLAY_SHM_VERSION		2
+
+/* Default panel orientation (matches ESP-IDF / Linux fb_jd9853 bring-up) */
+#define LCD_MIRROR_X_DEFAULT		1
+#define LCD_MIRROR_Y_DEFAULT		0
 
 #define DISPLAY_W			172
 #define DISPLAY_H			320
@@ -34,6 +38,7 @@
 enum display_cmd_id {
 	DISPLAY_CMD_FLUSH = 0,
 	DISPLAY_CMD_BL,
+	DISPLAY_CMD_MIRROR,
 	DISPLAY_CMD_LIMIT,
 };
 
@@ -48,6 +53,9 @@ struct display_shm {
 	uint32_t write_idx;	/* buffer index ready for RTOS SPI blit */
 	uint32_t dirty;		/* Linux sets 1, RTOS clears after blit */
 	uint32_t te_sync_cnt;
+	uint8_t  mirror_x;	/* 0/1: horizontal mirror (MADCTL MX) */
+	uint8_t  mirror_y;	/* 0/1: vertical mirror (MADCTL MY) */
+	uint8_t  reserved_mirror[2];
 	uint8_t  buf[DISPLAY_BUF_COUNT][DISPLAY_FRAME_BYTES];
 } __attribute__((packed, aligned(64)));
 

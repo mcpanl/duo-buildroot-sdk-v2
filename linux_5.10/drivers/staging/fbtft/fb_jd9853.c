@@ -14,6 +14,7 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/string.h>
+#include <linux/device.h>
 #include <video/mipi_display.h>
 
 #include "fbtft.h"
@@ -24,14 +25,41 @@
 #define X_OFFSET	34
 #define TXBUFLEN	(4 * PAGE_SIZE)
 #define RGB565_BLUE	0x001F
+#define LCD_MIRROR_X_DEFAULT	1
+#define LCD_MIRROR_Y_DEFAULT	0
+
+static int g_mirror_x = LCD_MIRROR_X_DEFAULT;
+static int g_mirror_y = LCD_MIRROR_Y_DEFAULT;
+static struct spi_device *g_jd9853_spi;
+
+static int zonhor_mirror_bootarg(const char *name, int defval)
+{
+	const char *s = strstr(saved_command_line, name);
+
+	if (!s)
+		return defval;
+	s += strlen(name);
+	return (*s == '1') ? 1 : 0;
+}
+
+static void jd9853_apply_mirror_hw(struct fbtft_par *par)
+{
+	u8 madctl = 0;
+
+	if (g_mirror_x)
+		madctl |= BIT(6);
+	if (g_mirror_y)
+		madctl |= BIT(7);
+
+	write_reg(par, MIPI_DCS_SET_ADDRESS_MODE, madctl);
+	write_reg(par, 0x21);
+}
 
 static int init_display_preserve(struct fbtft_par *par)
 {
-	/* Orientation must match U-Boot jd9853_logo (mirror X + invert) */
-	write_reg(par, MIPI_DCS_SET_ADDRESS_MODE, BIT(6));
-	write_reg(par, 0x21);
-	/* Enable TE output on GPIO (vblank sync pulse) */
+	/* Orientation from U-Boot env via kernel cmdline */
 	write_reg(par, MIPI_DCS_SET_TEAR_ON, 0x00);
+	jd9853_apply_mirror_hw(par);
 	return 0;
 }
 
@@ -91,9 +119,8 @@ static int init_display(struct fbtft_par *par)
 	write_reg(par, 0x29);
 	mdelay(20);
 
-	/* Match ESP example: mirror X + invert color */
-	write_reg(par, MIPI_DCS_SET_ADDRESS_MODE, BIT(6));
-	write_reg(par, 0x21);
+	/* Match saved mirror settings */
+	jd9853_apply_mirror_hw(par);
 
 	/* Fill framebuffer blue for bring-up visibility */
 	if (par->info && par->info->screen_base) {
@@ -131,10 +158,16 @@ static void set_addr_win(struct fbtft_par *par, int xs, int ys, int xe, int ye)
 
 static int set_var(struct fbtft_par *par)
 {
+	u8 madctl = 0;
+
 	switch (par->info->var.rotate) {
 	case 0:
-		write_reg(par, MIPI_DCS_SET_ADDRESS_MODE,
-			  MEM_X | (par->bgr << MEM_BGR));
+		if (g_mirror_x)
+			madctl |= MEM_X;
+		if (g_mirror_y)
+			madctl |= MEM_Y;
+		madctl |= (par->bgr << MEM_BGR);
+		write_reg(par, MIPI_DCS_SET_ADDRESS_MODE, madctl);
 		break;
 	case 270:
 		write_reg(par, MIPI_DCS_SET_ADDRESS_MODE,
@@ -177,20 +210,98 @@ static bool zonhor_lcd_owner_is_linux(void)
 	return strncmp(s, "linux", 5) == 0;
 }
 
+static struct fbtft_par *jd9853_get_par(void)
+{
+	struct fb_info *info;
+
+	if (!g_jd9853_spi)
+		return NULL;
+	info = spi_get_drvdata(g_jd9853_spi);
+	if (!info)
+		return NULL;
+	return info->par;
+}
+
+static ssize_t mirror_x_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	return sysfs_emit(buf, "%d\n", g_mirror_x);
+}
+
+static ssize_t mirror_x_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	struct fbtft_par *par;
+	int v;
+
+	if (kstrtoint(buf, 10, &v))
+		return -EINVAL;
+	g_mirror_x = v ? 1 : 0;
+	par = jd9853_get_par();
+	if (par) {
+		jd9853_apply_mirror_hw(par);
+		par->fbtftops.update_display(par, 0, par->info->var.yres - 1);
+	}
+	return count;
+}
+static DEVICE_ATTR_RW(mirror_x);
+
+static ssize_t mirror_y_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	return sysfs_emit(buf, "%d\n", g_mirror_y);
+}
+
+static ssize_t mirror_y_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	struct fbtft_par *par;
+	int v;
+
+	if (kstrtoint(buf, 10, &v))
+		return -EINVAL;
+	g_mirror_y = v ? 1 : 0;
+	par = jd9853_get_par();
+	if (par) {
+		jd9853_apply_mirror_hw(par);
+		par->fbtftops.update_display(par, 0, par->info->var.yres - 1);
+	}
+	return count;
+}
+static DEVICE_ATTR_RW(mirror_y);
+
 static int fbtft_driver_probe_spi(struct spi_device *spi)
 {
+	int ret;
+
 	if (!zonhor_lcd_owner_is_linux()) {
 		dev_info(&spi->dev,
 			 "fb_jd9853 skipped (cvi.lcd_owner!=linux, RTOS owns SPI)\n");
 		return -ENODEV;
 	}
-	return fbtft_probe_common(&display, spi, NULL);
+
+	g_mirror_x = zonhor_mirror_bootarg("cvi.lcd_mirror_x=", LCD_MIRROR_X_DEFAULT);
+	g_mirror_y = zonhor_mirror_bootarg("cvi.lcd_mirror_y=", LCD_MIRROR_Y_DEFAULT);
+
+	ret = fbtft_probe_common(&display, spi, NULL);
+	if (ret)
+		return ret;
+
+	g_jd9853_spi = spi;
+	device_create_file(&spi->dev, &dev_attr_mirror_x);
+	device_create_file(&spi->dev, &dev_attr_mirror_y);
+	dev_info(&spi->dev, "mirror_x=%d mirror_y=%d\n", g_mirror_x, g_mirror_y);
+	return 0;
 }
 
 static int fbtft_driver_remove_spi(struct spi_device *spi)
 {
 	struct fb_info *info = spi_get_drvdata(spi);
 
+	device_remove_file(&spi->dev, &dev_attr_mirror_x);
+	device_remove_file(&spi->dev, &dev_attr_mirror_y);
+	if (g_jd9853_spi == spi)
+		g_jd9853_spi = NULL;
 	return fbtft_remove_common(&spi->dev, info);
 }
 

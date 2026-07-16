@@ -1,17 +1,74 @@
 #!/bin/sh
-# Zonhor RTOS LCD validation helpers (run on target after flash).
-# Usage: zonhor-lcd-check [status|fill|switch-rtos|switch-linux]
+# Zonhor LCD helpers (RTOS proxy or Linux fbtft).
+# Usage:
+#   zonhor-lcd-check [status|fill|switch-rtos|switch-linux]
+#   zonhor-lcd-check mirror-get
+#   zonhor-lcd-check mirror-set <mirror_x 0|1> <mirror_y 0|1>
 
 set -eu
 
 cmd=${1:-status}
 
+zonhor_lcd_proxy_sysfs() {
+	for p in \
+		/sys/devices/platform/zonhor-lcd-proxy \
+		/sys/bus/platform/devices/zonhor-lcd-proxy; do
+		if [ -d "$p" ]; then
+			echo "$p"
+			return 0
+		fi
+	done
+	return 1
+}
+
+zonhor_fb_jd9853_sysfs() {
+	for p in /sys/bus/spi/devices/spi*/mirror_x; do
+		[ -f "$p" ] || continue
+		dir=$(dirname "$p")
+		case "$dir" in
+		*/spi3.*|*/spi*.0)
+			echo "$dir"
+			return 0
+			;;
+		esac
+	done
+	for p in /sys/bus/spi/devices/spi*/mirror_x; do
+		[ -f "$p" ] && dirname "$p" && return 0
+	done
+	return 1
+}
+
+zonhor_mirror_apply_runtime() {
+	mx=$1
+	my=$2
+	applied=0
+
+	if proxy=$(zonhor_lcd_proxy_sysfs); then
+		echo "$mx" > "$proxy/mirror_x"
+		echo "$my" > "$proxy/mirror_y"
+		applied=1
+	fi
+	if spi=$(zonhor_fb_jd9853_sysfs); then
+		echo "$mx" > "$spi/mirror_x"
+		echo "$my" > "$spi/mirror_y"
+		applied=1
+	fi
+	if [ "$applied" = 0 ]; then
+		echo "warn: no runtime mirror sysfs (driver not loaded yet?)" >&2
+		return 1
+	fi
+	return 0
+}
+
 case "$cmd" in
 status)
 	echo "=== cmdline ==="
-	tr '\0' '\n' </proc/cmdline | tr ' ' '\n' | grep -E 'cvi.lcd_owner|root=' || true
-	echo "=== lcd_owner env ==="
-	fw_printenv -n lcd_owner 2>/dev/null || echo "(unset, default rtos)"
+	tr '\0' '\n' </proc/cmdline | tr ' ' '\n' | \
+		grep -E 'cvi.lcd_owner|cvi.lcd_mirror|root=' || true
+	echo "=== uboot env ==="
+	echo "lcd_owner=$(fw_printenv -n lcd_owner 2>/dev/null || echo '(unset, default rtos)')"
+	echo "lcd_mirror_x=$(fw_printenv -n lcd_mirror_x 2>/dev/null || echo '(unset, default 1)')"
+	echo "lcd_mirror_y=$(fw_printenv -n lcd_mirror_y 2>/dev/null || echo '(unset, default 0)')"
 	echo "=== fb0 ==="
 	if [ -e /dev/fb0 ]; then
 		fbset -i 2>/dev/null || ls -l /dev/fb0
@@ -19,19 +76,27 @@ status)
 		echo "MISSING /dev/fb0"
 	fi
 	echo "=== proxy shm status ==="
-	cat /sys/devices/platform/zonhor-lcd-proxy/status 2>/dev/null || \
-		cat /sys/bus/platform/devices/zonhor-lcd-proxy/status 2>/dev/null || \
-		echo "(status sysfs missing)"
+	if proxy=$(zonhor_lcd_proxy_sysfs); then
+		cat "$proxy/status" 2>/dev/null || echo "(status sysfs missing)"
+	else
+		echo "(proxy not loaded)"
+	fi
+	echo "=== runtime mirror sysfs ==="
+	if proxy=$(zonhor_lcd_proxy_sysfs); then
+		echo "proxy mirror_x=$(cat "$proxy/mirror_x") mirror_y=$(cat "$proxy/mirror_y")"
+	fi
+	if spi=$(zonhor_fb_jd9853_sysfs); then
+		echo "fb_jd9853 mirror_x=$(cat "$spi/mirror_x") mirror_y=$(cat "$spi/mirror_y")"
+	fi
 	echo "=== modules / dmesg ==="
 	lsmod | grep -E 'zonhor_lcd|fb_jd9853|rtos_cmdqu|spi_dw' || true
-	dmesg | grep -Ei 'zonhor lcd|fb_jd9853|SPI3 skipped|display_shm|lcd_owner|linux_ready|self-test' | tail -30
+	dmesg | grep -Ei 'zonhor lcd|fb_jd9853|SPI3 skipped|display_shm|lcd_owner|mirror|linux_ready|self-test' | tail -30
 	;;
 fill)
-	# Write solid blue RGB565 into /dev/fb0 (110080 bytes)
 	python3 - <<'PY'
 import os, struct, time
 W,H=172,320
-color=0x001F  # blue
+color=0x001F
 path="/dev/fb0"
 data=struct.pack("<H", color)*(W*H)
 fd=os.open(path, os.O_RDWR)
@@ -40,11 +105,32 @@ os.close(fd)
 print("wrote blue fill to", path)
 time.sleep(0.2)
 PY
-	# Force another submit via sysfs if available
-	echo 1 > /sys/devices/platform/zonhor-lcd-proxy/flush 2>/dev/null || \
-		echo 1 > /sys/bus/platform/devices/zonhor-lcd-proxy/flush 2>/dev/null || true
-	cat /sys/devices/platform/zonhor-lcd-proxy/status 2>/dev/null || \
-		cat /sys/bus/platform/devices/zonhor-lcd-proxy/status 2>/dev/null || true
+	if proxy=$(zonhor_lcd_proxy_sysfs); then
+		echo 1 > "$proxy/flush"
+		cat "$proxy/status"
+	fi
+	;;
+mirror-get)
+	echo "lcd_mirror_x=$(fw_printenv -n lcd_mirror_x 2>/dev/null || echo 1)"
+	echo "lcd_mirror_y=$(fw_printenv -n lcd_mirror_y 2>/dev/null || echo 0)"
+	if proxy=$(zonhor_lcd_proxy_sysfs); then
+		echo "runtime_proxy_x=$(cat "$proxy/mirror_x")"
+		echo "runtime_proxy_y=$(cat "$proxy/mirror_y")"
+	fi
+	if spi=$(zonhor_fb_jd9853_sysfs); then
+		echo "runtime_fb_x=$(cat "$spi/mirror_x")"
+		echo "runtime_fb_y=$(cat "$spi/mirror_y")"
+	fi
+	;;
+mirror-set)
+	MX=${2:?usage: zonhor-lcd-check mirror-set <mirror_x 0|1> <mirror_y 0|1>}
+	MY=${3:?usage: zonhor-lcd-check mirror-set <mirror_x 0|1> <mirror_y 0|1>}
+	case "$MX" in 0|1) ;; *) echo "mirror_x must be 0 or 1" >&2; exit 1 ;; esac
+	case "$MY" in 0|1) ;; *) echo "mirror_y must be 0 or 1" >&2; exit 1 ;; esac
+	fw_setenv lcd_mirror_x "$MX"
+	fw_setenv lcd_mirror_y "$MY"
+	zonhor_mirror_apply_runtime "$MX" "$MY" || true
+	echo "saved lcd_mirror_x=$MX lcd_mirror_y=$MY (persists across reboot/owner switch)"
 	;;
 switch-rtos)
 	fw_setenv lcd_owner rtos
@@ -55,7 +141,7 @@ switch-linux)
 	echo "lcd_owner=linux set; reboot to apply"
 	;;
 *)
-	echo "Usage: $0 [status|fill|switch-rtos|switch-linux]"
+	echo "Usage: $0 [status|fill|mirror-get|mirror-set <x> <y>|switch-rtos|switch-linux]"
 	exit 1
 	;;
 esac

@@ -241,6 +241,9 @@ static int jd9853_write_reg_buf(struct jd9853_priv *priv, u8 cmd,
 	jd9853_write_reg_buf(priv, cmd, (u8[]){ __VA_ARGS__ }, \
 			     NUMARGS(__VA_ARGS__))
 
+static int jd9853_env_mirror(const char *name, int defval);
+static u8 jd9853_madctl_from_env(void);
+
 static int jd9853_init_panel(struct jd9853_priv *priv)
 {
 	int ret;
@@ -360,7 +363,7 @@ static int jd9853_init_panel(struct jd9853_priv *priv)
 		return ret;
 	mdelay(20);
 
-	ret = WR_REG(priv, DCS_MADCTL, BIT(6));
+	ret = WR_REG(priv, DCS_MADCTL, jd9853_madctl_from_env());
 	if (ret)
 		return ret;
 	ret = jd9853_write_cmd(priv, DCS_INVON);
@@ -369,6 +372,26 @@ static int jd9853_init_panel(struct jd9853_priv *priv)
 
 	printf("jd9853: panel init OK\n");
 	return 0;
+}
+
+static int jd9853_env_mirror(const char *name, int defval)
+{
+	const char *s = env_get(name);
+
+	if (!s)
+		return defval;
+	return s[0] == '1';
+}
+
+static u8 jd9853_madctl_from_env(void)
+{
+	u8 madctl = 0;
+
+	if (jd9853_env_mirror("lcd_mirror_x", LCD_MIRROR_X_DEFAULT))
+		madctl |= BIT(6);
+	if (jd9853_env_mirror("lcd_mirror_y", LCD_MIRROR_Y_DEFAULT))
+		madctl |= BIT(7);
+	return madctl;
 }
 
 static int jd9853_set_addr_win(struct jd9853_priv *priv, int xs, int ys,
@@ -545,10 +568,13 @@ static void jd9853_init_display_shm(void)
 	shm->version = DISPLAY_SHM_VERSION;
 	shm->owner = owner_id;
 	shm->bl_on = 1;
+	shm->mirror_x = jd9853_env_mirror("lcd_mirror_x", LCD_MIRROR_X_DEFAULT);
+	shm->mirror_y = jd9853_env_mirror("lcd_mirror_y", LCD_MIRROR_Y_DEFAULT);
 	flush_dcache_range((unsigned long)shm, sizeof(*shm));
-	printf("jd9853: display_shm @ 0x%x owner=%s\n",
+	printf("jd9853: display_shm @ 0x%x owner=%s mirror=%u,%u\n",
 	       CVIMMAP_DISPLAY_SHM_ADDR,
-	       owner_id == DISPLAY_OWNER_LINUX ? "linux" : "rtos");
+	       owner_id == DISPLAY_OWNER_LINUX ? "linux" : "rtos",
+	       shm->mirror_x, shm->mirror_y);
 }
 
 static int do_jd9853_logo(struct cmd_tbl *cmdtp, int flag, int argc,

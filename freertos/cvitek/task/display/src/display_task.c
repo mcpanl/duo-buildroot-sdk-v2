@@ -18,6 +18,15 @@ static struct display_shm *g_shm;
 static QueueHandle_t xQueueDisplay;
 static int g_spi_ready;
 
+static void display_sync_mirror_from_shm(void)
+{
+	if (!g_shm)
+		return;
+
+	inv_dcache_range((uintptr_t)g_shm, 64);
+	jd9853_set_mirror(g_shm->mirror_x, g_shm->mirror_y);
+}
+
 static void display_flush_frame(void)
 {
 	uint32_t idx;
@@ -38,7 +47,11 @@ static void display_flush_frame(void)
 	src = (const uint16_t *)g_shm->buf[idx];
 	inv_dcache_range((uintptr_t)src, DISPLAY_FRAME_BYTES);
 
+	display_sync_mirror_from_shm();
+
 	jd9853_wait_te();
+	if (jd9853_apply_orientation() != 0)
+		return;
 	jd9853_set_addr_win(0, 0, JD9853_WIDTH - 1, JD9853_HEIGHT - 1);
 	jd9853_write_pixels_be(src, (size_t)JD9853_WIDTH * JD9853_HEIGHT);
 
@@ -105,6 +118,10 @@ static int display_open_spi(void)
 		return -1;
 	}
 
+	display_sync_mirror_from_shm();
+	printf("display: mirror_x=%u mirror_y=%u\n",
+	       (unsigned)g_shm->mirror_x, (unsigned)g_shm->mirror_y);
+
 	g_spi_ready = 1;
 	g_shm->rtos_ready = 1;
 	flush_dcache_range((uintptr_t)g_shm, 64);
@@ -147,6 +164,12 @@ void prvDisplayRunTask(void *pvParameters)
 					break;
 				case DISPLAY_CMD_BL:
 					jd9853_set_backlight(rtos_cmdq.param_ptr ? 1 : 0);
+					break;
+				case DISPLAY_CMD_MIRROR:
+					display_sync_mirror_from_shm();
+					jd9853_apply_orientation();
+					if (g_shm->dirty)
+						display_flush_frame();
 					break;
 				default:
 					break;

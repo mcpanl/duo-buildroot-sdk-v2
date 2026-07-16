@@ -4,9 +4,10 @@
 #include "gpio.h"
 #include "delay.h"
 #include "mmio.h"
-#include "hal_spi3.h"
-#include "jd9853_panel.h"
 #include "pinctrl.h"
+#include "hal_spi3.h"
+#include "display_shm.h"
+#include "jd9853_panel.h"
 
 #define DCS_SLPOUT		0x11
 #define DCS_DISPON		0x29
@@ -15,8 +16,16 @@
 #define DCS_RAMWR		0x2c
 #define DCS_MADCTL		0x36
 #define DCS_COLMOD		0x3a
+#define DCS_INVOFF		0x20
 #define DCS_INVON		0x21
 #define DCS_TEON		0x35
+
+/* Match Linux fb_jd9853 / U-Boot jd9853_logo: MADCTL MX/MY + color invert */
+#define JD9853_MADCTL_MX	0x40u
+#define JD9853_MADCTL_MY	0x80u
+
+static uint8_t g_mirror_x = LCD_MIRROR_X_DEFAULT;
+static uint8_t g_mirror_y = LCD_MIRROR_Y_DEFAULT;
 
 #define PIN_DC			GPIOB(20)
 #define PIN_RST			GPIOB(12)
@@ -189,23 +198,53 @@ static int jd9853_full_init(void)
 	if (ret)
 		return ret;
 	mdelay(20);
-	ret = WR_REG(DCS_MADCTL, 0x40);
-	if (ret)
-		return ret;
-	return jd9853_write_cmd(DCS_INVON);
+	return jd9853_apply_orientation();
 }
 
-static int jd9853_skip_init(void)
+/*
+ * Re-apply panel scan order after SPI controller re-init.
+ * Use INVOFF then INVON so repeated skip-init cannot leave inversion in an
+ * unknown toggled state (RTOS path re-opens DW SSI after U-Boot).
+ */
+int jd9853_apply_orientation(void)
 {
+	uint8_t madctl = 0;
 	int ret;
 
-	ret = WR_REG(DCS_MADCTL, 0x40);
+	if (g_mirror_x)
+		madctl |= JD9853_MADCTL_MX;
+	if (g_mirror_y)
+		madctl |= JD9853_MADCTL_MY;
+
+	ret = WR_REG(DCS_MADCTL, madctl);
+	if (ret)
+		return ret;
+	ret = jd9853_write_cmd(DCS_INVOFF);
 	if (ret)
 		return ret;
 	ret = jd9853_write_cmd(DCS_INVON);
 	if (ret)
 		return ret;
 	return WR_REG(DCS_TEON, 0x00);
+}
+
+void jd9853_set_mirror(uint8_t mirror_x, uint8_t mirror_y)
+{
+	g_mirror_x = mirror_x ? 1 : 0;
+	g_mirror_y = mirror_y ? 1 : 0;
+}
+
+void jd9853_get_mirror(uint8_t *mirror_x, uint8_t *mirror_y)
+{
+	if (mirror_x)
+		*mirror_x = g_mirror_x;
+	if (mirror_y)
+		*mirror_y = g_mirror_y;
+}
+
+static int jd9853_skip_init(void)
+{
+	return jd9853_apply_orientation();
 }
 
 int jd9853_panel_init(int skip_init)
@@ -265,7 +304,7 @@ static uint16_t cpu_to_be16_u(uint16_t v)
 	return (uint16_t)((v << 8) | (v >> 8));
 }
 
-int jd9853_write_pixels_be(const uint16_t *src, size_t pixels)
+static int jd9853_write_pixels_be_linear(const uint16_t *src, size_t pixels)
 {
 	size_t off = 0;
 	int ret;
@@ -285,6 +324,11 @@ int jd9853_write_pixels_be(const uint16_t *src, size_t pixels)
 		off += n;
 	}
 	return 0;
+}
+
+int jd9853_write_pixels_be(const uint16_t *src, size_t pixels)
+{
+	return jd9853_write_pixels_be_linear(src, pixels);
 }
 
 int jd9853_fill_color(uint16_t rgb565)
