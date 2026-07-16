@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# Print embedded firmware version early on boot (OTA-enabled boards).
+#
+
+case "$1" in
+start)
+	if [ -x /usr/sbin/zonhor-firmware-banner ]; then
+		/usr/sbin/zonhor-firmware-banner
+	fi
+	;;
+stop|restart|reload)
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
+
+exit 0

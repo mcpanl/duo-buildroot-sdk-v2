@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# Early OTA hook: apply pending upgrade from /mnt/data before apps start.
+#
+
+. /usr/sbin/zonhor-ota-common.sh
+
+case "$1" in
+start)
+	data_mount || {
+		echo "S05ota: DATA mount failed, skipping"
+		exit 0
+	}
+
+	if [ ! -f "$OTA_PENDING" ]; then
+		exit 0
+	fi
+
+	# New stage: work already unpacked. Old stage: only zip present.
+	if ota_work_ready || [ -f "$OTA_FILE" ]; then
+		echo "S05ota: pending upgrade detected, applying..."
+		/usr/sbin/zonhor-ota-apply
+		exit $?
+	fi
+
+	echo "S05ota: pending marker without work/zip, clearing"
+	rm -f "$OTA_PENDING"
+	;;
+stop)
+	;;
+restart|reload)
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
+
+exit 0

@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# /var/lock is a symlink to /run/lock; ensure the target exists early.
+#
+
+case "$1" in
+start)
+	if ! mountpoint -q /run; then
+		mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run 2>/dev/null || true
+	fi
+	mkdir -p /run/lock
+	chmod 1777 /run/lock
+	;;
+stop)
+	;;
+restart|reload)
+	$0 start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
+
+exit 0

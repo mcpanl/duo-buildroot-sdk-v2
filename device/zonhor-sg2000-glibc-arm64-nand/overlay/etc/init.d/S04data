@@ -1,0 +1,56 @@
+#!/bin/sh
+#
+# Mount DATA UBIFS volume for user data and OTA staging (SPI NAND).
+# MTD layout: fip(0) BOOT(1) BOOT_B(2) MISC(3) ENV(4) ENV_BAK(5)
+#             ROOTFS(6) ROOTFS_B(7) DATA(8)
+# Kernel typically attaches active ROOTFS as ubi0; DATA uses ubi1.
+#
+
+DATA_MTD="${ZONHOR_DATA_MTD:-8}"
+DATA_UBI="${ZONHOR_DATA_UBI:-1}"
+DATA_MNT=/mnt/data
+
+case "$1" in
+start)
+	mkdir -p "$DATA_MNT"
+	if [ ! -c /dev/ubi_ctrl ]; then
+		mdev -s 2>/dev/null || true
+	fi
+	if [ ! -e "/dev/mtd${DATA_MTD}" ]; then
+		echo "S04data: /dev/mtd${DATA_MTD} missing, skip"
+		exit 0
+	fi
+	if [ ! -e "/dev/ubi${DATA_UBI}" ]; then
+		if ! ubiattach /dev/ubi_ctrl -m "$DATA_MTD" >/dev/null 2>&1; then
+			ubiformat -y "/dev/mtd${DATA_MTD}" >/dev/null 2>&1 || true
+			ubiattach /dev/ubi_ctrl -m "$DATA_MTD" >/dev/null 2>&1 || true
+		fi
+		mdev -s 2>/dev/null || true
+	fi
+	if [ -e "/dev/ubi${DATA_UBI}" ] && [ ! -e "/dev/ubi${DATA_UBI}_0" ]; then
+		ubimkvol "/dev/ubi${DATA_UBI}" -N DATA -m >/dev/null 2>&1 || true
+		mdev -s 2>/dev/null || true
+	fi
+	if [ -e "/dev/ubi${DATA_UBI}_0" ]; then
+		mount -t ubifs -o sync "/dev/ubi${DATA_UBI}_0" "$DATA_MNT" 2>/dev/null || {
+			ubimkvol "/dev/ubi${DATA_UBI}" -N DATA -m >/dev/null 2>&1 || true
+			mount -t ubifs -o sync "/dev/ubi${DATA_UBI}_0" "$DATA_MNT" 2>/dev/null || true
+		}
+	fi
+	;;
+stop)
+	if mountpoint -q "$DATA_MNT"; then
+		umount "$DATA_MNT" 2>/dev/null || true
+	fi
+	;;
+restart|reload)
+	$0 stop
+	$0 start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
+
+exit 0

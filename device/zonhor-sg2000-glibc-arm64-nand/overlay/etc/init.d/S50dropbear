@@ -1,0 +1,21 @@
+#!/bin/sh
+#
+# Disable legacy Dropbear when OpenSSH is the SSH server.
+#
+
+case "$1" in
+start)
+	if [ -x /usr/sbin/sshd ]; then
+		start-stop-daemon -K -q -p /var/run/dropbear.pid 2>/dev/null || true
+		killall dropbear 2>/dev/null || true
+	fi
+	;;
+stop|restart|reload)
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|reload}"
+	exit 1
+	;;
+esac
+
+exit 0

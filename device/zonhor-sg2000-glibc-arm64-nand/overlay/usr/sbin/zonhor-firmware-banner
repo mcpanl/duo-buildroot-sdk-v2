@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# Print firmware version banner to the serial console (and kernel log).
+#
+
+INFO=/etc/zonhor-firmware-version
+
+[ -r "$INFO" ] || exit 0
+
+VERSION=$(grep -E '^VERSION=' "$INFO" | head -1 | sed 's/^VERSION=//' | tr -d '"')
+BUILD_TIME=$(grep -E '^BUILD_TIME=' "$INFO" | head -1 | sed 's/^BUILD_TIME=//' | sed 's/^"\(.*\)"$/\1/')
+BOARD=$(grep -E '^BOARD=' "$INFO" | head -1 | sed 's/^BOARD=//' | tr -d '"')
+
+print_banner() {
+	echo ""
+	echo "========================================"
+	echo " Firmware version: ${VERSION:-unknown}"
+	echo " Build time:       ${BUILD_TIME:-unknown}"
+	[ -n "${BOARD:-}" ] && echo " Board:            ${BOARD}"
+	echo "========================================"
+	echo ""
+}
+
+print_banner
+
+if [ -w /dev/kmsg ]; then
+	print_banner | while IFS= read -r line; do
+		printf '<6>%s\n' "$line" >/dev/kmsg 2>/dev/null || true
+	done
+fi

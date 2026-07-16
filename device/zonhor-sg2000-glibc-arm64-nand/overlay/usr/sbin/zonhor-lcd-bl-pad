@@ -1,0 +1,90 @@
+#!/bin/sh
+# Configure / query JD9853 backlight pad (JTAG_CPU_TRST / XGPIOA_20).
+#
+# Hardware: active-high enable. Sysfs bl_power uses FB_BLANK_* (0=on, 1=off),
+# which is NOT a GPIO polarity inversion.
+#
+# Pad conf @ 0x03001938: bit2=PU, bit3=PD (same as other CV181x pads).
+# Pull-down keeps the pin low if mem (S2RAM) drops the GPIO bank.
+#
+# Usage:
+#   zonhor-lcd-bl-pad pulldown   # clear PU, set PD (boot / before mem)
+#   zonhor-lcd-bl-pad show
+
+REG=0x03001938
+PU_BIT=2
+PD_BIT=3
+
+die() {
+	echo "zonhor-lcd-bl-pad: $*" >&2
+	exit 1
+}
+
+read_reg() {
+	if command -v devmem >/dev/null 2>&1; then
+		devmem "${REG}" 32
+		return
+	fi
+	if command -v python3 >/dev/null 2>&1; then
+		python3 - <<'PY'
+import mmap, os, struct
+addr = 0x03001938
+page = addr & ~0xFFF
+off = addr & 0xFFF
+fd = os.open("/dev/mem", os.O_RDONLY | os.O_SYNC)
+m = mmap.mmap(fd, 0x1000, mmap.MAP_SHARED, mmap.PROT_READ, offset=page)
+print("0x%08x" % struct.unpack_from("<I", m, off)[0])
+m.close()
+os.close(fd)
+PY
+		return
+	fi
+	die "need busybox devmem or python3 to access /dev/mem"
+}
+
+write_reg() {
+	val=$1
+	if command -v devmem >/dev/null 2>&1; then
+		devmem "${REG}" 32 "${val}"
+		return
+	fi
+	if command -v python3 >/dev/null 2>&1; then
+		python3 - <<PY
+import mmap, os, struct
+addr = 0x03001938
+val = int("${val}", 0)
+page = addr & ~0xFFF
+off = addr & 0xFFF
+fd = os.open("/dev/mem", os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 0x1000, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=page)
+struct.pack_into("<I", m, off, val & 0xFFFFFFFF)
+m.close()
+os.close(fd)
+PY
+		return
+	fi
+	die "need busybox devmem or python3 to access /dev/mem"
+}
+
+cmd=${1:-show}
+
+case "${cmd}" in
+show)
+	val=$(read_reg) || exit 1
+	v=$((val))
+	pu=$(( (v >> PU_BIT) & 1 ))
+	pd=$(( (v >> PD_BIT) & 1 ))
+	echo "pad ${REG}=${val} PU=${pu} PD=${pd}"
+	;;
+pulldown)
+	val=$(read_reg) || exit 1
+	v=$((val))
+	# clear PU+PD, then set PD
+	new=$(( (v & ~((1 << PU_BIT) | (1 << PD_BIT))) | (1 << PD_BIT) ))
+	write_reg "$(printf '0x%x' "${new}")" || exit 1
+	echo "pad ${REG}: PU=0 PD=1 (was ${val}, now $(printf '0x%x' "${new}"))"
+	;;
+*)
+	die "usage: $0 [show|pulldown]"
+	;;
+esac

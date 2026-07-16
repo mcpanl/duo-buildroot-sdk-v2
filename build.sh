@@ -180,6 +180,7 @@ function build_usage()
   echo "  defconfig, or partition changes."
   echo ""
   echo "${BASH_SOURCE[0]} zonhor                     - Build zonhor-sg2000-glibc-arm64-emmc"
+  echo "${BASH_SOURCE[0]} zonhor-nand                - Build zonhor-sg2000-glibc-arm64-nand"
   echo "Supported boards:"
   list_boards
 }
@@ -244,6 +245,8 @@ if [ $# -ge 1 ]; then
     MILKV_BOARD_ARG="$1"
     if [ "$MILKV_BOARD_ARG" = "zonhor" ] || [ "$MILKV_BOARD_ARG" = "zonhor-sg2000" ]; then
       MILKV_BOARD_ARG="zonhor-sg2000-glibc-arm64-emmc"
+    elif [ "$MILKV_BOARD_ARG" = "zonhor-nand" ]; then
+      MILKV_BOARD_ARG="zonhor-sg2000-glibc-arm64-nand"
     fi
     if [ $# -ge 2 ]; then
       MILKV_ACTION="$2"

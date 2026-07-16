@@ -1,0 +1,32 @@
+#!/bin/sh
+#
+# Set default ADC capture gain for onboard analog microphones.
+#
+
+set_adc_gain() {
+	[ -d /proc/asound/card0 ] || return 1
+	amixer -c 0 cset name='ADC Capture Volume' 16,16 >/dev/null 2>&1
+}
+
+case "$1" in
+start)
+	i=0
+	while [ $i -lt 10 ]; do
+		if set_adc_gain; then
+			exit 0
+		fi
+		i=$((i + 1))
+		sleep 1
+	done
+	echo "S08audio: failed to set ADC capture volume"
+	;;
+stop)
+	;;
+restart|reload)
+	$0 start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|reload}"
+	exit 1
+	;;
+esac

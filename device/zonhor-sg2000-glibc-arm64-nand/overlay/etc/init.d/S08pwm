@@ -1,0 +1,42 @@
+#!/bin/sh
+#
+# Bring up PWM buzzer support at boot.
+# Prefer pwm-beeper when the DT node exists; otherwise use PWM sysfs.
+#
+
+PWM_KO=/mnt/system/ko/cv181x_pwm.ko
+
+load_pwm() {
+	[ -f "$PWM_KO" ] || return 1
+	lsmod | grep -q '^cv181x_pwm ' && return 0
+	insmod "$PWM_KO" 2>/dev/null
+}
+
+bind_buzzer() {
+	[ -e /sys/bus/platform/devices/buzzer ] || return 1
+	[ -e /sys/bus/platform/devices/buzzer/driver ] && return 0
+	echo buzzer > /sys/bus/platform/drivers/pwm-beeper/bind 2>/dev/null
+}
+
+case "$1" in
+start)
+	load_pwm
+	if [ -e /sys/bus/platform/devices/buzzer ]; then
+		bind_buzzer
+	else
+		/usr/sbin/zonhor-buzzer off >/dev/null 2>&1
+	fi
+	;;
+stop)
+	/usr/sbin/zonhor-buzzer off >/dev/null 2>&1
+	;;
+restart|reload)
+	$0 start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|reload}"
+	exit 1
+	;;
+esac
+
+exit 0

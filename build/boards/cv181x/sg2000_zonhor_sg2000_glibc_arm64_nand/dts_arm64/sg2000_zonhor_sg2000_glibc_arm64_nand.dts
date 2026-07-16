@@ -1,0 +1,277 @@
+/dts-v1/;
+#include "cv181x_base_arm.dtsi"
+#include "cv181x_asic_bga.dtsi"
+#include "cv181x_asic_spinand.dtsi"
+#include "cv181x_default_memmap.dtsi"
+
+/ {
+	model = "Zonhor SG2000";
+
+	leds {
+		compatible = "gpio-leds";
+
+		sys-led {
+			label = "sys-led";
+			gpios = <&porta 29 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "activity";
+		};
+
+		user-led {
+			label = "user-led";
+			gpios = <&porta 18 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		user-button {
+			label = "user-button";
+			linux,code = <28>; /* KEY_ENTER */
+			gpios = <&portb 4 GPIO_ACTIVE_LOW>;
+			debounce-interval = <10>;
+			wakeup-source;
+		};
+	};
+
+	/* PWM0 on GPIOB_0 (PWM0_BUCK), 4 kHz buzzer */
+	buzzer_amp: buzzer-amp {
+		compatible = "regulator-fixed";
+		regulator-name = "buzzer-amp";
+		regulator-always-on;
+	};
+
+	buzzer {
+		compatible = "pwm-beeper";
+		pwms = <&pwm0 0 250000>;
+		beeper-hz = <4000>;
+		amp-supply = <&buzzer_amp>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		display_shm_reserved: display-shm@95300000 {
+			compatible = "shared-dma-pool";
+			reg = <0x0 CVIMMAP_DISPLAY_SHM_ADDR 0x0 CVIMMAP_DISPLAY_SHM_SIZE>;
+			no-map;
+		};
+	};
+
+	zonhor_lcd_proxy: zonhor-lcd-proxy {
+		compatible = "cvitek,zonhor-lcd-proxy";
+		memory-region = <&display_shm_reserved>;
+		status = "okay";
+	};
+};
+
+&{/aliases} {
+	spi0 = &spi0;
+	spi1 = &spi1;
+	spi2 = &spi2;
+	spi3 = &spi3;
+};
+
+&mipi_rx {
+	snsr-reset = <&porta 2 GPIO_ACTIVE_LOW>, <&porta 2 GPIO_ACTIVE_LOW>, <&porta 2 GPIO_ACTIVE_LOW>;
+};
+
+&porta {
+	cam1-a3-fixed-low {
+		gpio-hog;
+		gpios = <3 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "cam1-a3-fixed-low";
+	};
+
+	cam1-a4-fixed-high {
+		gpio-hog;
+		gpios = <4 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "cam1-a4-fixed-high";
+	};
+};
+
+&i2c0 {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "okay";
+
+	/* Reserved addresses for board peripherals */
+	axp2101: pmic@34 {
+		compatible = "x-powers,axp2101";
+		reg = <0x34>;
+		/*
+		 * INT# -> PAD_SD0_PWR_EN / GPIOA14 (open-drain, falling edge).
+		 * U-Boot sets XGPIOA_14 + weak pull-up + input; keep &sd
+		 * disabled so the SDHCI driver does not reclaim this pad.
+		 */
+		interrupt-parent = <&porta>;
+		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
+		wakeup-source;
+		status = "okay";
+
+		regulators {
+			dcdc4 {
+				regulator-name = "dcdc4";
+				regulator-min-microvolt = <1100000>;
+				regulator-max-microvolt = <1100000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+		};
+
+		battery-power-supply {
+			compatible = "x-powers,axp2101-battery-power-supply";
+		};
+	};
+
+	icm42688: imu@18 {
+		compatible = "hxymos,icm42688p";
+		reg = <0x18>;
+		interrupt-parent = <&portb>;
+		interrupts = <22 IRQ_TYPE_EDGE_RISING>;
+		status = "okay";
+	};
+
+	touch@15 {
+		compatible = "hynitron,hyn_ts";
+		reg = <0x15>;
+		interrupt-parent = <&porta>;
+		interrupts = <28 IRQ_TYPE_EDGE_FALLING>;
+		hynitron,irq-gpio = <&porta 28 0>;
+		hynitron,reset-gpio = <&portb 21 0>;
+		hynitron,max-touch-number = <1>;
+		hynitron,display-coords = <172 320>;
+		pos-swap = <0>;
+		posx-reverse = <0>;
+		posy-reverse = <0>;
+		status = "okay";
+	};
+
+	wusb3801q: typec@60 {
+		compatible = "willsemi,wusb3801q";
+		reg = <0x60>;
+		interrupt-parent = <&porta>;
+		interrupts = <19 IRQ_TYPE_EDGE_FALLING>;
+		id-gpios = <&porta 30 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
+};
+
+&i2c2 {
+	status = "disabled";
+};
+
+&i2c3 {
+	status = "okay";
+};
+
+&i2c4 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "okay";
+	num-cs = <1>;
+	spi-max-frequency = <40000000>;
+
+	/delete-node/ spidev@0;
+
+	jd9853: display@0 {
+		compatible = "jadard,jd9853";
+		reg = <0>;
+		spi-max-frequency = <40000000>;
+		buswidth = <8>;
+		width = <172>;
+		height = <320>;
+		rotate = <0>;
+		fps = <30>;
+		backlight = <1>;
+		fbtft,skip-init;
+		dc = <&portb 20 0>;
+		reset = <&portb 12 GPIO_ACTIVE_LOW>;
+		te = <&portb 11 0>;
+		led = <&porta 20 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
+};
+
+&pwm0 {
+	#pwm-cells = <2>;
+	status = "okay";
+};
+
+/* Enable internal ADC path; codec supports both MICL/MICR channels. */
+&adc {
+	status = "okay";
+};
+
+&{/sound_adc} {
+	status = "okay";
+};
+
+&dac {
+	/delete-property/ mute-gpio-l;
+	/delete-property/ mute-gpio-r;
+};
+
+/* mipi dsi blocks unused on Zonhor (SPI JD9853 panel) */
+&vo {
+	status = "disabled";
+};
+
+&mipi_tx {
+	status = "disabled";
+};
+
+/*
+ * SDIO0 PAD_SD0_PWR_EN is reused as AXP2101 INT# (GPIOA14). The cv181x SD
+ * host would force that pad back to SDIO0_PWR_EN + pull-down on probe, so
+ * leave SD0 disabled; boot/storage uses eMMC, WiFi uses &wifisd (SDIO1).
+ */
+&sd {
+	status = "disabled";
+};
+
+&wifisd {
+	status = "okay";
+	cap-sd-highspeed;
+	sd-uhs-sdr25;
+	sd-uhs-ddr50;
+	sd-uhs-sdr104;
+	min-frequency = <400000>;
+	max-frequency = <187500000>;
+};
+
+&wifi_pin {
+	status = "okay";
+	compatible = "cvitek,wifi-pin";
+	poweron-gpio = <&porta 15 GPIO_ACTIVE_HIGH>;
+	wakeup-gpio = <&porte 7 GPIO_ACTIVE_HIGH>;
+};
+
+&usb {
+	vbus-gpio = <&portb 6 0>;
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&uart2 {
+	status = "okay";
+};
+
+&uart3 {
+	status = "okay";
+};
+
+&uart4 {
+	status = "okay";
+};

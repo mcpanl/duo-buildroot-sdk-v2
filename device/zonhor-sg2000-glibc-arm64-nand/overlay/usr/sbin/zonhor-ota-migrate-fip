@@ -1,0 +1,65 @@
+#!/bin/sh
+#
+# Rescue helper: flash fip.bin from upgrade.zip to eMMC boot partitions.
+# Layout migration to A/B still requires a full USB flash with fip.bin.
+#
+
+. /usr/sbin/zonhor-ota-common.sh
+
+WORK=/tmp/fip-migrate
+ZIP=""
+
+usage() {
+	echo "Usage: $0 [upgrade.zip]"
+	echo "  Flashes fip.bin to mmcblk0boot0/boot1, then reboot."
+	echo "  For A/B layout migration, use USB usb_dl with the new partition_emmc.xml."
+	exit 1
+}
+
+log() {
+	echo "$*"
+}
+
+fail() {
+	log "ERROR: $*"
+	ota_led_error
+	rm -rf "$WORK"
+	exit 1
+}
+
+data_mount || fail "cannot prepare $DATA_MNT"
+
+if [ -n "$1" ]; then
+	[ -f "$1" ] || fail "file not found: $1"
+	ZIP="$1"
+else
+	ZIP=$(ota_find_upgrade_zip) || fail "upgrade.zip not found under $DATA_MNT"
+fi
+
+rm -rf "$WORK"
+mkdir -p "$WORK"
+
+log "extracting fip.bin from $ZIP"
+ota_led_start fip
+unzip -q -j "$ZIP" fip.bin -d "$WORK" || fail "fip.bin missing in package"
+[ -s "$WORK/fip.bin" ] || fail "fip.bin is empty"
+
+for bootdev in /sys/block/mmcblk0boot0/force_ro /sys/block/mmcblk0boot1/force_ro; do
+	if [ -f "$bootdev" ]; then
+		echo 0 >"$bootdev" || fail "cannot disable read-only on $bootdev"
+	fi
+done
+
+log "writing fip.bin to /dev/mmcblk0boot0 and mmcblk0boot1"
+dd if="$WORK/fip.bin" of=/dev/mmcblk0boot0 bs=512 conv=fsync || fail "dd to mmcblk0boot0 failed"
+dd if="$WORK/fip.bin" of=/dev/mmcblk0boot1 bs=512 conv=fsync || fail "dd to mmcblk0boot1 failed"
+
+sync
+rm -rf "$WORK"
+
+log "fip flash complete"
+ota_led_stop
+log "reboot now; for A/B layout verify: lsblk (expect BOOT/BOOT_B/ROOTFS/ROOTFS_B/DATA)"
+log "full layout migration still requires USB usb_dl with fip.bin"
+sleep 2
+reboot -f

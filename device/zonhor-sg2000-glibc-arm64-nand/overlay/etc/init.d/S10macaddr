@@ -1,0 +1,29 @@
+#!/bin/sh
+#
+# Set deterministic eth0 MAC from chip UID before dhcpcd starts.
+#
+
+MAC_SCRIPT=/usr/sbin/zonhor-mac-from-uid
+
+case "$1" in
+start)
+	[ -x "$MAC_SCRIPT" ] || exit 0
+
+	mac=$("$MAC_SCRIPT" eth0) || exit 0
+
+	if command -v fw_printenv >/dev/null 2>&1; then
+		current=$(fw_printenv -n ethaddr 2>/dev/null || true)
+		if [ -n "$mac" ] && [ "$current" != "$mac" ]; then
+			fw_setenv ethaddr "$mac" 2>/dev/null || true
+		fi
+	fi
+	;;
+stop|restart|reload)
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|reload}"
+	exit 1
+	;;
+esac
+
+exit 0

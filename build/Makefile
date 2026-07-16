@@ -648,12 +648,28 @@ endif
 	${Q}rm -rf $(BR_MV_VENDOR_DIR)
 
 	# copy rootfs to rawimg dir
+ifeq ($(STORAGE_TYPE),spinand)
+	# Buildroot produces rootfs.tar.xz; convert to UBI/squashfs for SPI NAND
+	${Q}rm -rf $(OUTPUT_DIR)/tmp-br-rootfs
+	${Q}mkdir -p $(OUTPUT_DIR)/tmp-br-rootfs $(OUTPUT_DIR)/rawimages
+	${Q}tar xf $(TARGET_OUTPUT_DIR)/images/rootfs.tar.xz -C $(OUTPUT_DIR)/tmp-br-rootfs
+	${Q}mksquashfs $(OUTPUT_DIR)/tmp-br-rootfs $(OUTPUT_DIR)/rawimages/rootfs.sqsh -root-owned -comp xz -e mnt/cfg/*
+	${Q}python3 $(COMMON_TOOLS_PATH)/spinand_tool/mkubiimg.py --ubionly $(FLASH_PARTITION_XML) ROOTFS $(OUTPUT_DIR)/rawimages/rootfs.sqsh $(OUTPUT_DIR)/rawimages/rootfs.spinand -b $(CONFIG_NANDFLASH_BLOCKSIZE) -p $(CONFIG_NANDFLASH_PAGESIZE)
+	${Q}rm -f $(OUTPUT_DIR)/rawimages/rootfs.sqsh
+	${Q}rm -rf $(OUTPUT_DIR)/tmp-br-rootfs
+	$(call raw2cimg ,rootfs.spinand)
+ifeq ($(CONFIG_AB_SYSTEM),y)
+	${Q}cp $(OUTPUT_DIR)/rawimages/rootfs.spinand $(OUTPUT_DIR)/rawimages/rootfs_b.spinand
+	$(call raw2cimg ,rootfs_b.spinand)
+endif
+else
 	${Q}cp $(TARGET_OUTPUT_DIR)/images/rootfs.ext4 $(OUTPUT_DIR)/rawimages/rootfs_ext4.$(STORAGE_TYPE)
 	$(call raw2cimg ,rootfs_ext4.$(STORAGE_TYPE))
 ifeq ($(CONFIG_AB_SYSTEM),y)
 ifneq ($(STORAGE_TYPE),sd)
 	${Q}cp $(OUTPUT_DIR)/rawimages/rootfs_ext4.$(STORAGE_TYPE) $(OUTPUT_DIR)/rawimages/rootfs_b_ext4.$(STORAGE_TYPE)
 	$(call raw2cimg ,rootfs_b_ext4.$(STORAGE_TYPE))
+endif
 endif
 endif
 

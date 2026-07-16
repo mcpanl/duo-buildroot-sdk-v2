@@ -1,0 +1,14 @@
+;section for source
+[source]
+;type = SOURCE_USER_FE
+dev_num = 1
+;section for sensor
+[sensor]
+;sensor name (2x2 hardware binning 1920x1080, full FOV, RAW10)
+name = SONY_IMX678_MIPI_2M_30FPS_10BIT_BIN
+;bus/i2c dev number
+bus_id = 3
+sns_i2c_addr = 26
+mipi_dev = 0
+lane_id = 0, 1, 3, 2, 4
+pn_swap = 1, 1, 1, 1, 1

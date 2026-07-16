@@ -1,0 +1,75 @@
+#!/bin/sh
+#
+# Control the onboard PWM buzzer on GPIOB_0 (PWM0 / PWM0_BUCK).
+# Uses Cvitek PWM sysfs; does not require the pwm-beeper DT node.
+#
+
+PWM_ADDR=3060000
+PWM_KO=/mnt/system/ko/cv181x_pwm.ko
+FREQ_HZ=4000
+PERIOD_NS=$((1000000000 / FREQ_HZ))
+DUTY_NS=$((PERIOD_NS / 2))
+
+find_pwm_chip() {
+	for chip in /sys/class/pwm/pwmchip*; do
+		[ -d "$chip" ] || continue
+		node=$(readlink -f "$chip/device/of_node" 2>/dev/null) || continue
+		case "$node" in *"$PWM_ADDR"*) echo "$chip"; return 0 ;; esac
+	done
+	return 1
+}
+
+ensure_pwm() {
+	if ! lsmod | grep -q '^cv181x_pwm '; then
+		[ -f "$PWM_KO" ] || return 1
+		insmod "$PWM_KO" 2>/dev/null || return 1
+	fi
+	PWM_CHIP=$(find_pwm_chip) || return 1
+	PWM_CHAN="$PWM_CHIP/pwm0"
+	export PWM_CHIP PWM_CHAN
+	return 0
+}
+
+buzzer_export() {
+	[ -d "$PWM_CHAN" ] && return 0
+	echo 0 > "$PWM_CHIP/export" 2>/dev/null || return 1
+	[ -d "$PWM_CHAN" ]
+}
+
+buzzer_on() {
+	ensure_pwm || return 1
+	buzzer_export || return 1
+	echo "$PERIOD_NS" > "$PWM_CHAN/period" || return 1
+	echo "$DUTY_NS" > "$PWM_CHAN/duty_cycle" || return 1
+	echo 1 > "$PWM_CHAN/enable" || return 1
+}
+
+buzzer_off() {
+	[ -n "$PWM_CHAN" ] && [ -d "$PWM_CHAN" ] || return 0
+	echo 0 > "$PWM_CHAN/enable" 2>/dev/null
+}
+
+usage() {
+	echo "Usage: $0 {on|off|beep [seconds]}"
+}
+
+case "$1" in
+on|start)
+	buzzer_on || exit 1
+	;;
+off|stop)
+	buzzer_off
+	;;
+beep)
+	secs="${2:-0.5}"
+	buzzer_on || exit 1
+	sleep "$secs"
+	buzzer_off
+	;;
+*)
+	usage
+	exit 1
+	;;
+esac
+
+exit 0

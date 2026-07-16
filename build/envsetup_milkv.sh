@@ -634,10 +634,23 @@ function build_all()
     fi
     build_pqtool_server || return $?
   fi
-  pack_cfg || return $?
+  # SPI NAND mkubiimg requires CFG/SYSTEM labels; monolith BUILDROOT layouts omit them.
+  if [ -n "${FLASH_PARTITION_XML}" ] && grep -q 'label="CFG"' "${FLASH_PARTITION_XML}" 2>/dev/null; then
+    pack_cfg || return $?
+  elif [ "${STORAGE_TYPE}" != "spinand" ]; then
+    pack_cfg || return $?
+  else
+    print_notice "Skip pack_cfg: no CFG partition in ${FLASH_PARTITION_XML}"
+  fi
   pack_rootfs || return $?
   pack_data || return $?
-  pack_system || return $?
+  if [ -n "${FLASH_PARTITION_XML}" ] && grep -q 'label="SYSTEM"' "${FLASH_PARTITION_XML}" 2>/dev/null; then
+    pack_system || return $?
+  elif [ "${STORAGE_TYPE}" != "spinand" ]; then
+    pack_system || return $?
+  else
+    print_notice "Skip pack_system: no SYSTEM partition in ${FLASH_PARTITION_XML}"
+  fi
   copy_tools || return $?
   pack_upgrade || return $?
 )}
@@ -876,13 +889,16 @@ function cvi_setup_env()
 
     if [[ "$ENABLE_ALIOS" != "y" ]]; then
       pushd "$BUILD_PATH"/boards/"${CHIP_ARCH,,}"/"$PROJECT_FULLNAME"/partition/
-      if [[ "$AB_SYSTEM" == "y" ]]; then
-        ln -fs ../../../default/partition/partition_spinand_page_"$PAGE_SUFFIX"_ab.xml \
-          partition_"$STORAGE_TYPE".xml
-	  else
-        ln -fs ../../../default/partition/partition_spinand_page_"$PAGE_SUFFIX".xml \
-          partition_"$STORAGE_TYPE".xml
-	  fi
+      # Keep board-provided partition_spinand.xml; only symlink defaults when missing.
+      if [ ! -e "partition_${STORAGE_TYPE}.xml" ] || [ -L "partition_${STORAGE_TYPE}.xml" ]; then
+        if [[ "$AB_SYSTEM" == "y" ]]; then
+          ln -fs ../../../default/partition/partition_spinand_page_"$PAGE_SUFFIX"_ab.xml \
+            partition_"$STORAGE_TYPE".xml
+        else
+          ln -fs ../../../default/partition/partition_spinand_page_"$PAGE_SUFFIX".xml \
+            partition_"$STORAGE_TYPE".xml
+        fi
+      fi
       popd
     fi
   fi
@@ -920,6 +936,8 @@ function cvi_setup_env()
   elif [[ ${MV_BOARD} == *"-duos-"* ]]; then
     MV_BOARD_TYPE="duos"
   elif [[ ${MV_BOARD} == "zonhor-sg2000-glibc-arm64-emmc" ]]; then
+    MV_BOARD_TYPE="duos"
+  elif [[ ${MV_BOARD} == "zonhor-sg2000-glibc-arm64-nand" ]]; then
     MV_BOARD_TYPE="duos"
   else
     print_error "Unknown MV_BOARD_TYPE!"

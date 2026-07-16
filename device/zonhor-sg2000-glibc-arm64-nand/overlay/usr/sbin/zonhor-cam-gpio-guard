@@ -1,0 +1,118 @@
+#!/bin/sh
+# Keep CAM1 pads as fixed GPIO outputs:
+#   GPIOA3 (CAM_MCLK1 pad) low, GPIOA4 (CAM_PD1 pad) high.
+
+PINMUX_CAM_MCLK1=0x0300100c
+PINMUX_CAM_PD1=0x03001010
+GPIOA_DR=0x03020000
+GPIOA_DDR=0x03020004
+PINMUX_MASK=0x7
+PINMUX_GPIO=0x3
+GPIOA3=0x8
+GPIOA4=0x10
+GPIOA34=0x18
+
+die() {
+	echo "zonhor-cam-gpio-guard: $*" >&2
+	exit 1
+}
+
+read_reg() {
+	addr=$1
+
+	if command -v devmem >/dev/null 2>&1; then
+		devmem "${addr}" 32
+		return
+	fi
+
+	if command -v python3 >/dev/null 2>&1; then
+		python3 - "${addr}" <<'PY'
+import mmap
+import os
+import struct
+import sys
+
+addr = int(sys.argv[1], 0)
+page = addr & ~0xfff
+off = addr & 0xfff
+with open("/dev/mem", "rb", buffering=0) as fd:
+    mm = mmap.mmap(fd.fileno(), 0x1000, mmap.MAP_SHARED, mmap.PROT_READ, offset=page)
+    try:
+        print("0x%08x" % struct.unpack_from("<I", mm, off)[0])
+    finally:
+        mm.close()
+PY
+		return
+	fi
+
+	return 1
+}
+
+write_reg() {
+	addr=$1
+	val=$2
+
+	if command -v devmem >/dev/null 2>&1; then
+		devmem "${addr}" 32 "${val}" >/dev/null
+		return
+	fi
+
+	if command -v python3 >/dev/null 2>&1; then
+		python3 - "${addr}" "${val}" <<'PY'
+import mmap
+import os
+import struct
+import sys
+
+addr = int(sys.argv[1], 0)
+val = int(sys.argv[2], 0) & 0xffffffff
+page = addr & ~0xfff
+off = addr & 0xfff
+with open("/dev/mem", "r+b", buffering=0) as fd:
+    mm = mmap.mmap(fd.fileno(), 0x1000, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=page)
+    try:
+        struct.pack_into("<I", mm, off, val)
+    finally:
+        mm.close()
+PY
+		return
+	fi
+
+	return 1
+}
+
+clrset_reg() {
+	addr=$1
+	clear=$2
+	set=$3
+	val=$(read_reg "${addr}") || die "need devmem or python3 for /dev/mem"
+	new=$(( (val & ~clear) | set ))
+	write_reg "${addr}" "$(printf '0x%08x' "${new}")" || die "write ${addr} failed"
+}
+
+apply_guard() {
+	clrset_reg "${PINMUX_CAM_MCLK1}" "${PINMUX_MASK}" "${PINMUX_GPIO}"
+	clrset_reg "${PINMUX_CAM_PD1}" "${PINMUX_MASK}" "${PINMUX_GPIO}"
+
+	# Program data before direction so GPIOA3 never glitches high.
+	clrset_reg "${GPIOA_DR}" "${GPIOA34}" "${GPIOA4}"
+	clrset_reg "${GPIOA_DDR}" "${GPIOA34}" "${GPIOA34}"
+}
+
+show_regs() {
+	for reg in "${PINMUX_CAM_MCLK1}" "${PINMUX_CAM_PD1}" "${GPIOA_DR}" "${GPIOA_DDR}"; do
+		printf '%s=%s\n' "${reg}" "$(read_reg "${reg}")"
+	done
+}
+
+case "${1:-apply}" in
+	apply)
+		apply_guard
+		;;
+	show)
+		show_regs
+		;;
+	*)
+		die "usage: $0 [apply|show]"
+		;;
+esac
