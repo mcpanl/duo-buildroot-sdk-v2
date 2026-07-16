@@ -16,7 +16,6 @@
 #include "fb_lcd.h"
 #include "rgb888_rgb565.h"
 #include "perf_stats.h"
-#include "yuv_snapshot.h"
 
 #define VPSS_ALIGN 64
 #define VPSS_ALIGN_UP(x) ((((x) + VPSS_ALIGN - 1) / VPSS_ALIGN) * VPSS_ALIGN)
@@ -447,7 +446,6 @@ int main(int argc, char **argv)
 
 	usleep(500 * 1000);
 	perf_timespec_now(&perf_report_start);
-	yuv_snapshot_init();
 
 	SAMPLE_PRT("Preview started. Press Ctrl+C to exit.\n");
 	SAMPLE_PRT("Perf stats every %ds (temporary instrumentation).\n",
@@ -513,8 +511,6 @@ int main(int argc, char **argv)
 		perf_timespec_now(&frame_loop_end);
 		perf_record(PERF_FRAME_TOTAL,
 			    perf_elapsed_ns(&frame_loop_start, &frame_loop_end));
-
-		yuv_snapshot_try_save(VPSS_GRP_ROT, VpssChn);
 
 		if (perf_report_due(&perf_report_start, PERF_REPORT_INTERVAL_SEC)) {
 			perf_print_report();
