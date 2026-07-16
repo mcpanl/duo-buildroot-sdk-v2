@@ -74,3 +74,5 @@ python3 zonhor-imx678-debug-collect.py
 ```
 
 细节与踩坑见 `cvi_mpi/component/isp/sensor/sg200x/sony_imx678/PORTING_NOTES_SG2000.md` §7。
+
+**CviIspTool `vi init failed` 专项排障**（配置 + 符号抢占 + 部署）：见 [CviIspTool_IMX678_BIN_troubleshooting.md](./CviIspTool_IMX678_BIN_troubleshooting.md)。

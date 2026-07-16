@@ -238,6 +238,18 @@ cp /mnt/system/usr/bin/sensor_cfg.ini.imx678_1080p_bin /mnt/data/sensor_cfg.ini
 sample_sensor_test   # 或 sample_sensor_lcd
 ```
 
+**ISP 调参工具（CviIspTool）**：除 `cfg_*_imx678.json`（offline + compress none）外，还须部署带
+`-Wl,-Bsymbolic` 的 `libcvi_rtsp_service.so`——否则运行时 `libsample.so` 会抢占
+`SAMPLE_PLAT_VI_INIT`，导致 `vi init failed` 且无 dmesg。
+
+```bash
+cp /mnt/system/usr/bin/sensor_cfg.ini.imx678_1080p_bin /mnt/data/sensor_cfg.ini
+cd /mnt/system/usr/bin
+./CviIspTool.sh 128M
+# 期望日志: IMX678: using ./cfg_128M_imx678.json
+#           ===IMX678 1080P30fps 10bit LINE(bin) Init OK!===
+```
+
 回退裁剪模式：
 
 ```bash
