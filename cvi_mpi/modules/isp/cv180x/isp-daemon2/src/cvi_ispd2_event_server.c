@@ -61,6 +61,39 @@
 	} \
 }
 
+static void CVI_ISPD2_ES_ResetBinaryInForDisconnect(TISPDaemon2ConnectInfo *ptConnectObj)
+{
+	TBinaryData *ptBinaryInData;
+
+	if (ptConnectObj == NULL || ptConnectObj->ptDaemonInfo == NULL)
+		return;
+
+	ptBinaryInData = &(ptConnectObj->ptDaemonInfo->tDeviceInfo.tBinaryInData);
+	if (ptBinaryInData->pu8Buffer == (CVI_U8 *)ptConnectObj->pszRecvBuffer)
+		ptBinaryInData->pu8Buffer = CVI_NULL;
+
+	CVI_ISPD2_ResetBinaryInStructure(ptBinaryInData);
+}
+
+void CVI_ISPD2_ES_OnClientDisconnect(TISPDaemon2ConnectInfo *ptConnectObj)
+{
+	CVI_ISPD2_ES_ResetBinaryInForDisconnect(ptConnectObj);
+}
+
+static CVI_BOOL CVI_ISPD2_ES_LooksLikeJsonRpc(const char *pszBuf, CVI_U32 u32Offset, CVI_U32 u32TotalSize)
+{
+	while (u32Offset < u32TotalSize) {
+		char c = pszBuf[u32Offset];
+
+		if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
+			u32Offset++;
+		else
+			return (c == '{' || c == '[') ? CVI_TRUE : CVI_FALSE;
+	}
+
+	return CVI_FALSE;
+}
+
 // -----------------------------------------------------------------------------
 static void CVI_ISPD2_ES_CB_AllocBuffer(cvi_uv_handle_t *pHandle, size_t lSuggestedLength, cvi_uv_buf_t *pBuf)
 {
@@ -104,6 +137,12 @@ static void CVI_ISPD2_ES_HandleMessageBuffer(char *pszBuf, CVI_U32 u32BufOffset,
 		CONNECTINFO_RESET_RECV_BUFFER_STATUS(ptConnectObj);
 		CONNECTINFO_RESET_BINARY_MODE_STATUS(ptConnectObj);
 		return;
+	}
+
+	if (bBinaryMode && CVI_ISPD2_ES_LooksLikeJsonRpc(pszBuf, u32BufOffset, u32ContentTotalSize)) {
+		ISP_DAEMON2_DEBUG(LOG_DEBUG, "JSON-RPC detected while binary mode armed, reset binary state");
+		CVI_ISPD2_ResetBinaryInStructure(ptBinaryInData);
+		bBinaryMode = CVI_FALSE;
 	}
 
 	if (!bBinaryMode) {
@@ -271,6 +310,7 @@ static void CVI_ISPD2_ES_CB_SocketRead(cvi_uv_stream_t *pUVClientHandle, ssize_t
 		cvi_uv_read_stop(pUVClient);
 
 		ptConnectObj->ptDaemonInfo->u8ClientCount--;
+		CVI_ISPD2_ES_OnClientDisconnect(ptConnectObj);
 
 		SAFE_FREE(ptConnectObj->pszRecvBuffer);
 		SAFE_FREE(ptConnectObj);

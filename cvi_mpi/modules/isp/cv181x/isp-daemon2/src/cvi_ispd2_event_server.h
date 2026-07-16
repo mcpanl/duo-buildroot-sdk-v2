@@ -34,5 +34,6 @@ typedef struct {
 CVI_S32 CVI_ISPD2_ES_CreateService(TISPDaemon2Info *ptObject, uint16_t u16ServicePort);
 CVI_S32 CVI_ISPD2_ES_RunService(TISPDaemon2Info *ptObject);
 CVI_S32 CVI_ISPD2_ES_DestoryService(TISPDaemon2Info *ptObject);
+void CVI_ISPD2_ES_OnClientDisconnect(TISPDaemon2ConnectInfo *ptConnectObj);
 
 #endif // _CVI_ISPD2_EVENT_SERVER_H_

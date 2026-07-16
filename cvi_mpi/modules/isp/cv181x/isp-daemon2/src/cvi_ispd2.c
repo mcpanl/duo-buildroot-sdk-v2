@@ -45,6 +45,7 @@ static void CVI_ISPD2_InitialDaemonInfo(TISPDaemon2Info *ptObject)
 	CVI_ISPD2_InitialBinaryData(&(ptDeviceInfo->tAEBinData));
 	CVI_ISPD2_InitialBinaryData(&(ptDeviceInfo->tAWBBinData));
 	CVI_ISPD2_InitialBinaryData(&(ptDeviceInfo->tBinaryOutData));
+	CVI_ISPD2_InitialBinaryData(&(ptDeviceInfo->tBinaryInData));
 	CVI_ISPD2_InitialRawReplayHandle(&(ptDeviceInfo->tRawReplayHandle));
 }
 

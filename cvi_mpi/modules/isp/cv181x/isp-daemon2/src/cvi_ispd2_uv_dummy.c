@@ -125,6 +125,7 @@ static void *cvi_uv_read(void *arg)
 
 	ISP_DAEMON2_DEBUG(LOG_DEBUG, "Client close");
 	ptConnectObj->ptDaemonInfo->u8ClientCount--;
+	CVI_ISPD2_ES_OnClientDisconnect(ptConnectObj);
 	SAFE_FREE(ptConnectObj->pszRecvBuffer);
 	SAFE_FREE(ptConnectObj);
 
