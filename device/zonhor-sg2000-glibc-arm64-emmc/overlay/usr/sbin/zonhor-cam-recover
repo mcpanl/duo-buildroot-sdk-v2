@@ -1,67 +1,172 @@
 #!/bin/sh
-# Reload CVITEK camera stack after VPSS/VI kernel Oops or stuck I2C.
-# Usage: zonhor-cam-recover [reload|i2c-test]
+# Reset CVITEK MPI/camera stack to a clean state without reboot.
+# Usage: zonhor-cam-recover [reload|status|i2c-test]
 
 I2C_BUS=3
 I2C_ADDR=0x1a
 CHIP_ID_REG=0x3022
+KO_DIR=/mnt/system/ko
+
+# Processes that may hold VI/VB/VPSS/ISP resources.
+CAMERA_PROCS="
+sample_sensor_lcd sample_sensor_test sample_vio sample_vi_fd
+isp_tool_daemon CviIspTool
+sample_vcodec sample_vdec sample_vdecvo sample_region
+sample_ir_auto z_mmf z_sample_vio_main
+screen_demo.py zonhor-ota-ui camera-test.sh
+"
 
 die() {
 	echo "zonhor-cam-recover: $*" >&2
 	exit 1
 }
 
+log() {
+	echo "zonhor-cam-recover: $*"
+}
+
+mod_loaded() {
+	mod="$1"
+	lsmod | awk 'NR>1 {print $1}' | grep -qx "$mod"
+}
+
 kill_camera_apps() {
-	killall sample_sensor_lcd sample_sensor_test sample_vio 2>/dev/null || true
+	local sig p
+
+	# SIGTERM first so well-behaved apps can SAMPLE_COMM_SYS_Exit().
+	for sig in TERM KILL; do
+		for p in $CAMERA_PROCS; do
+			killall -"$sig" "$p" 2>/dev/null || true
+		done
+		sleep 0.3
+	done
+	sleep 0.5
+}
+
+release_cvi_devices() {
+	local dev
+
+	for dev in /dev/cvi-* /dev/ion; do
+		[ -e "$dev" ] || continue
+		if command -v fuser >/dev/null 2>&1; then
+			fuser -k "$dev" 2>/dev/null || true
+		fi
+	done
 	sleep 0.2
 }
 
-reload_camera_ko() {
-	local m
+show_holders() {
+	local dev
 
-	kill_camera_apps
+	for dev in /dev/cvi-* /dev/ion; do
+		[ -e "$dev" ] || continue
+		if command -v fuser >/dev/null 2>&1; then
+			holders=$(fuser "$dev" 2>/dev/null) || holders=""
+			if [ -n "$holders" ]; then
+				echo "  $dev: pid $holders"
+			fi
+		fi
+	done
+}
 
-	for m in cv181x_ive cvi_vc_driver cv181x_jpeg cv181x_vcodec cv181x_rgn \
-		cv181x_mipi_tx cv181x_vo cv181x_dwa cv181x_vpss cv181x_vi snsr_i2c cvi_mipi_rx; do
-		rmmod "$m" 2>/dev/null || true
+show_status() {
+	echo "=== camera processes ==="
+	ps | grep -E 'sample_|isp_tool|CviIsp|camera-test|screen_demo|zonhor-ota' \
+		| grep -v grep || echo "  (none)"
+
+	echo "=== /dev/cvi-* holders ==="
+	show_holders
+
+	echo "=== key kernel modules ==="
+	for m in cv181x_base cv181x_vi cv181x_vpss cvi_mipi_rx snsr_i2c \
+		cv181x_rtos_cmdqu cv181x_fast_image cv181x_tpu; do
+		if mod_loaded "$m"; then
+			echo "  loaded: $m"
+		else
+			echo "  missing: $m"
+		fi
 	done
 
-	if [ ! -x /mnt/system/ko/loadsystemko.sh ]; then
-		die "missing /mnt/system/ko/loadsystemko.sh"
+	if [ -r /proc/cvitek/vb ]; then
+		echo "=== /proc/cvitek/vb (head) ==="
+		head -n 20 /proc/cvitek/vb 2>/dev/null || true
+	fi
+}
+
+reload_camera_stack() {
+	local unload unload_rc load_rc
+
+	kill_camera_apps
+	release_cvi_devices
+
+	if [ ! -x "$KO_DIR/unloadsystemko.sh" ]; then
+		die "missing $KO_DIR/unloadsystemko.sh"
+	fi
+	if [ ! -x "$KO_DIR/loadsystemko.sh" ]; then
+		die "missing $KO_DIR/loadsystemko.sh"
 	fi
 
-	/mnt/system/ko/loadsystemko.sh || die "loadsystemko.sh failed"
+	log "unloading camera kernel modules ..."
+	unload="$KO_DIR/unloadsystemko.sh"
+	unload_rc=0
+	"$unload" -v || unload_rc=$?
+
+	if [ "$unload_rc" -ne 0 ]; then
+		log "some modules still loaded, retry after killing holders ..."
+		kill_camera_apps
+		release_cvi_devices
+		"$unload" -v || die "unloadsystemko.sh failed; try: zonhor-cam-recover status"
+	fi
+
+	log "loading camera kernel modules ..."
+	load_rc=0
+	"$KO_DIR/loadsystemko.sh" || load_rc=$?
+	if [ "$load_rc" -ne 0 ]; then
+		die "loadsystemko.sh failed"
+	fi
+
+	# Allow snsr_i2c / sensor analog power to settle.
 	sleep 2
-	echo "Camera kernel modules reloaded."
+	log "camera stack reloaded."
 }
 
 i2c_test() {
+	local val retry
+
 	if ! command -v i2ctransfer >/dev/null 2>&1; then
 		die "i2ctransfer not installed"
 	fi
 	if [ ! -c "/dev/i2c-${I2C_BUS}" ]; then
-		die "/dev/i2c-${I2C_BUS} missing"
+		die "/dev/i2c-${I2C_BUS} missing (snsr_i2c not loaded?)"
 	fi
 
-	echo "Probing IMX678 on i2c-${I2C_BUS} addr ${I2C_ADDR} reg 0x${CHIP_ID_REG} ..."
-	val=$(i2ctransfer -y "${I2C_BUS}" w2@"${I2C_ADDR}" \
-		$((CHIP_ID_REG >> 8)) $((CHIP_ID_REG & 0xff)) r1 2>/dev/null) || true
-	if [ -z "$val" ]; then
-		echo "I2C read failed. Try: zonhor-cam-recover reload"
-		return 1
-	fi
-	echo "CHIP_ID(0x${CHIP_ID_REG}) = ${val} (expect 0x01)"
+	echo "Probing IMX678 on i2c-${I2C_BUS} addr ${I2C_ADDR} reg ${CHIP_ID_REG} ..."
+	for retry in 1 2 3 4 5; do
+		val=$(i2ctransfer -y "${I2C_BUS}" w2@"${I2C_ADDR}" \
+			$((CHIP_ID_REG >> 8)) $((CHIP_ID_REG & 0xff)) r1 2>/dev/null) || true
+		if [ -n "$val" ]; then
+			echo "CHIP_ID(${CHIP_ID_REG}) = ${val} (expect 0x01)"
+			return 0
+		fi
+		[ "$retry" -lt 5 ] && sleep 0.5
+	done
+
+	echo "I2C read failed. Try: zonhor-cam-recover reload"
+	return 1
 }
 
 case "${1:-reload}" in
 	reload)
-		reload_camera_ko
+		reload_camera_stack
 		i2c_test || true
+		;;
+	status)
+		show_status
 		;;
 	i2c-test)
 		i2c_test
 		;;
 	*)
-		die "usage: $0 [reload|i2c-test]"
+		die "usage: $0 [reload|status|i2c-test]"
 		;;
 esac

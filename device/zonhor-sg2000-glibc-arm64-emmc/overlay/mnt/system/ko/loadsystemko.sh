@@ -1,17 +1,14 @@
 #!/bin/sh
 ${CVI_SHOPTS}
 #
-# Start to insert kernel modules
+# Start to insert kernel modules (idempotent).
 #
-if ! lsmod | grep -q '^cv181x_sys '; then
-	insmod /mnt/system/ko/cv181x_sys.ko
-fi
-if ! lsmod | grep -q '^cv181x_base '; then
-	insmod /mnt/system/ko/cv181x_base.ko
-fi
-if ! lsmod | grep -q '^cv181x_pwm '; then
-	insmod /mnt/system/ko/cv181x_pwm.ko
-fi
+KO_DIR=/mnt/system/ko
+. "$KO_DIR/ko-common.sh"
+
+safe_insmod "$KO_DIR/cv181x_sys.ko"
+safe_insmod "$KO_DIR/cv181x_base.ko"
+safe_insmod "$KO_DIR/cv181x_pwm.ko"
 
 # CAM1 is disabled on this board. Keep CAM_MCLK1/CAM_PD1 pads as
 # GPIOA3=low and GPIOA4=high before any camera stack modules can touch them.
@@ -19,37 +16,35 @@ if [ -x /usr/sbin/zonhor-cam-gpio-guard ]; then
 	/usr/sbin/zonhor-cam-gpio-guard apply
 fi
 
-insmod /mnt/system/ko/cv181x_rtos_cmdqu.ko
-insmod /mnt/system/ko/cv181x_fast_image.ko
+safe_insmod "$KO_DIR/cv181x_rtos_cmdqu.ko"
+safe_insmod "$KO_DIR/cv181x_fast_image.ko"
 # LCD proxy: /dev/fb0 when cvi.lcd_owner=rtos (default). Harmless no-op if module
 # refuses probe under cvi.lcd_owner=linux.
-if [ -f /mnt/system/ko/cv181x_zonhor_lcd_proxy.ko ]; then
-	insmod /mnt/system/ko/cv181x_zonhor_lcd_proxy.ko || true
+if [ -f "$KO_DIR/cv181x_zonhor_lcd_proxy.ko" ]; then
+	safe_insmod "$KO_DIR/cv181x_zonhor_lcd_proxy.ko" || true
 fi
-insmod /mnt/system/ko/cvi_mipi_rx.ko
-insmod /mnt/system/ko/snsr_i2c.ko
-insmod /mnt/system/ko/cv181x_vi.ko
-insmod /mnt/system/ko/cv181x_vpss.ko
-insmod /mnt/system/ko/cv181x_dwa.ko
-insmod /mnt/system/ko/cv181x_vo.ko
-insmod /mnt/system/ko/cv181x_mipi_tx.ko
-insmod /mnt/system/ko/cv181x_rgn.ko
+safe_insmod "$KO_DIR/cvi_mipi_rx.ko"
+safe_insmod "$KO_DIR/snsr_i2c.ko"
+safe_insmod "$KO_DIR/cv181x_vi.ko"
+safe_insmod "$KO_DIR/cv181x_vpss.ko"
+safe_insmod "$KO_DIR/cv181x_dwa.ko"
+safe_insmod "$KO_DIR/cv181x_vo.ko"
+safe_insmod "$KO_DIR/cv181x_mipi_tx.ko"
+safe_insmod "$KO_DIR/cv181x_rgn.ko"
 
 if [ -x /usr/sbin/zonhor-cam-gpio-guard ]; then
 	/usr/sbin/zonhor-cam-gpio-guard apply
 fi
 
 #insmod /mnt/system/ko/cv181x_wdt.ko
-insmod /mnt/system/ko/cv181x_clock_cooling.ko
+safe_insmod "$KO_DIR/cv181x_clock_cooling.ko"
 
-insmod /mnt/system/ko/cv181x_tpu.ko
-insmod /mnt/system/ko/cv181x_vcodec.ko
-insmod /mnt/system/ko/cv181x_jpeg.ko
-insmod /mnt/system/ko/cvi_vc_driver.ko MaxVencChnNum=9 MaxVdecChnNum=9
-if ! lsmod | grep -q '^cv181x_rtc '; then
-	insmod /mnt/system/ko/cv181x_rtc.ko
-fi
-insmod /mnt/system/ko/cv181x_ive.ko
+safe_insmod "$KO_DIR/cv181x_tpu.ko"
+safe_insmod "$KO_DIR/cv181x_vcodec.ko"
+safe_insmod "$KO_DIR/cv181x_jpeg.ko"
+safe_insmod "$KO_DIR/cvi_vc_driver.ko" MaxVencChnNum=9 MaxVdecChnNum=9
+safe_insmod "$KO_DIR/cv181x_rtc.ko"
+safe_insmod "$KO_DIR/cv181x_ive.ko"
 
 #insmod /mnt/system/ko/3rd/gt9xx.ko
 
@@ -59,4 +54,4 @@ dmesg -n 4
 #usb hub control
 #/etc/uhubon.sh host
 
-exit $?
+exit 0
