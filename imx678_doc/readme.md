@@ -75,4 +75,6 @@ python3 zonhor-imx678-debug-collect.py
 
 细节与踩坑见 `cvi_mpi/component/isp/sensor/sg200x/sony_imx678/PORTING_NOTES_SG2000.md` §7。
 
+**颜色偏红蓝 / 三行一起错**：见 [IMX678_BAYER_RGGB_color_fix.md](./IMX678_BAYER_RGGB_color_fix.md)（ISP Bayer RGGB 配错，勿用 B-G-R workaround 掩盖）。
+
 **CviIspTool `vi init failed` 专项排障**（配置 + 符号抢占 + 部署）：见 [CviIspTool_IMX678_BIN_troubleshooting.md](./CviIspTool_IMX678_BIN_troubleshooting.md)。
