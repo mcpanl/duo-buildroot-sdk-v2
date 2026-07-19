@@ -197,6 +197,7 @@ i2ctransfer -y 3 w2@0x1a 0x30 0x47 r1   # 0x04
 | SOF 有、RecvPic=0（4K） | ISP 8MP 能力 / postraw，非 MIPI 物理层 |
 | PIX=1920×1080 但 CSIBDG 报错 | `stSnsSize` 误设为 PIX 尺寸而非 MIPI 帧尺寸 |
 | 显示 2M 但寄存器仍是 4K 宽高 | 新 `libsns_imx678.so` 未部署或 `u8ImgMode` 未切到 `2M30` |
+| 5MP 录像 ~100KB、黑屏洋红条 | VPSS 预旋转宽 ≥2880；见 [IMX678_HEVC_record_resolution_SG2000.md](../../../../../../imx678_doc/IMX678_HEVC_record_resolution_SG2000.md) |
 
 ---
 

@@ -67,6 +67,30 @@ ERROR_HANDLER:
 	return ret;
 }
 
+CVI_S32 SAMPLE_COMM_BIN_BindSensor(SAMPLE_SNS_TYPE_E enSnsType)
+{
+	SAMPLE_SNS_MODE_INFO_S stInfo;
+	CVI_S32 s32Ret;
+
+	s32Ret = SAMPLE_COMM_SNS_GetModeInfo(enSnsType, &stInfo);
+	if (s32Ret != CVI_SUCCESS)
+		return s32Ret;
+
+	if (!stInfo.pszIspBinPath)
+		return CVI_SUCCESS;
+
+	s32Ret = CVI_BIN_SetBinName(WDR_MODE_NONE, stInfo.pszIspBinPath);
+	if (s32Ret != CVI_SUCCESS) {
+		CVI_TRACE_SYS(CVI_DBG_WARN, "CVI_BIN_SetBinName(%s) fail: %#x\n",
+			      stInfo.pszIspBinPath, s32Ret);
+		return s32Ret;
+	}
+
+	SAMPLE_PRT("ISP bin bound: mode=%s path=%s\n",
+		   stInfo.pszModeName, stInfo.pszIspBinPath);
+	return CVI_SUCCESS;
+}
+
 CVI_S32 SAMPLE_COMM_BIN_ReadBlockParaFrombin(enum CVI_BIN_SECTION_ID id)
 {
 	CVI_S32 ret = CVI_SUCCESS;

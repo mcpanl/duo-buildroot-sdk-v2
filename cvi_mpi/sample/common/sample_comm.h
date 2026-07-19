@@ -641,6 +641,30 @@ typedef struct _SAMPLE_INI_CFG_S {
 	CVI_U8			u8SwitchPol[VI_MAX_DEV_NUM];
 } SAMPLE_INI_CFG_S;
 
+/* Active sensor mode info derived from sensor_cfg.ini / SAMPLE_SNS_TYPE_E. */
+typedef enum _SAMPLE_IMX678_MODE_E {
+	SAMPLE_IMX678_MODE_5M = 0,		/* 2880x1620 center crop, RAW12 */
+	SAMPLE_IMX678_MODE_1080P_BIN,		/* 1920x1080 2x2 binning, RAW10 */
+	SAMPLE_IMX678_MODE_1080P_CROP,		/* 1920x1080 center crop, RAW12 */
+	SAMPLE_IMX678_MODE_OTHER,
+} SAMPLE_IMX678_MODE_E;
+
+typedef struct _SAMPLE_SNS_MODE_INFO_S {
+	SAMPLE_SNS_TYPE_E	enSnsType;
+	SAMPLE_IMX678_MODE_E	enImx678Mode;
+	SIZE_S			stSize;
+	CVI_U8			u8SnsMode;	/* 0=crop, 1=2x2 bin */
+	CVI_U8			u8RawBitDepth;	/* 10 or 12 */
+	DATA_BITWIDTH_E		enViBitWidth;
+	PIXEL_FORMAT_E		enViPixFmt;
+	const CVI_CHAR		*pszModeName;
+	const CVI_CHAR		*pszIspBinPath;
+} SAMPLE_SNS_MODE_INFO_S;
+
+#define SAMPLE_ISP_BIN_IMX678_5M \
+	"/mnt/cfg/param/cvi_sdr_bin_IMX678_5M"
+#define SAMPLE_ISP_BIN_IMX678_1080P_BIN \
+	"/mnt/cfg/param/cvi_sdr_bin_IMX678_1080P_BIN"
 
 extern RGN_RGBQUARD_S overlay_palette[256];
 
@@ -749,6 +773,13 @@ CVI_S32 SAMPLE_COMM_SNS_GetSize(SAMPLE_SNS_TYPE_E enMode, PIC_SIZE_E *penSize);
 CVI_CHAR *SAMPLE_COMM_SNS_GetSnsrTypeName(void);
 CVI_S32 SAMPLE_COMM_SNS_SetIniPath(const CVI_CHAR *iniPath);
 CVI_S32 SAMPLE_COMM_SNS_ParseIni(SAMPLE_INI_CFG_S *pstIniCfg);
+CVI_BOOL SAMPLE_COMM_SNS_IsImx678(SAMPLE_SNS_TYPE_E enSnsType);
+CVI_S32 SAMPLE_COMM_SNS_GetModeInfo(SAMPLE_SNS_TYPE_E enSnsType,
+				    SAMPLE_SNS_MODE_INFO_S *pstInfo);
+CVI_S32 SAMPLE_COMM_SNS_QueryActiveMode(const SAMPLE_INI_CFG_S *pstIniCfg,
+					SAMPLE_SNS_MODE_INFO_S *pstInfo);
+CVI_S32 SAMPLE_COMM_SNS_QueryRuntimeMode(VI_PIPE ViPipe,
+					 SAMPLE_SNS_MODE_INFO_S *pstInfo);
 
 CVI_S32 SAMPLE_COMM_VPSS_Start(VPSS_GRP VpssGrp, CVI_BOOL *pabChnEnable, VPSS_GRP_ATTR_S *pstVpssGrpAttr,
 			       VPSS_CHN_ATTR_S *pastVpssChnAttr);
@@ -903,6 +934,7 @@ CVI_S32 SAMPLE_COMM_VO_Init_BT656_MS7024(char *i2c_bus_str, uint8_t slave_addr, 
 CVI_S32 SAMPLE_COMM_VO_Init_MIPI_HX8394(void *pvData);
 CVI_S32 SAMPLE_COMM_BIN_ReadParaFrombin(void);
 CVI_S32 SAMPLE_COMM_BIN_ReadBlockParaFrombin(enum CVI_BIN_SECTION_ID id);
+CVI_S32 SAMPLE_COMM_BIN_BindSensor(SAMPLE_SNS_TYPE_E enSnsType);
 /* SAMPLE_COMM_FRAME_SaveToFile:
  *   Save videoframe to the file
  *

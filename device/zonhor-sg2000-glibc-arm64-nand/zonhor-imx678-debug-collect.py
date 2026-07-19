@@ -49,10 +49,14 @@ I2C_SLAVE_FORCE = 0x0706
 SENSOR_CFG_PATHS = [
     "/mnt/system/usr/bin/sensor_cfg.ini",
     "/mnt/data/sensor_cfg.ini",
+    "/mnt/data/imx678_mode",
     "/mnt/system/sensor_cfg.ini.imx678",
     "/mnt/system/usr/bin/sensor_cfg.ini.imx678_1080p",
     "/mnt/system/usr/bin/sensor_cfg.ini.imx678_1080p_bin",
     "/mnt/system/usr/bin/sensor_cfg.ini.imx678_5m",
+    "/mnt/cfg/param/cvi_sdr_bin",
+    "/mnt/cfg/param/cvi_sdr_bin_IMX678_1080P_BIN",
+    "/mnt/cfg/param/cvi_sdr_bin_IMX678_5M",
 ]
 
 DMESG_KEYWORDS = re.compile(

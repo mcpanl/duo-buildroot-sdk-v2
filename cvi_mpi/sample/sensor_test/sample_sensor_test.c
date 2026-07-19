@@ -70,6 +70,19 @@ static int sys_vi_init(void)
 		SAMPLE_PRT("Parse complete\n");
 	}
 
+	{
+		SAMPLE_SNS_MODE_INFO_S stModeInfo;
+
+		if (SAMPLE_COMM_SNS_QueryActiveMode(&stIniCfg, &stModeInfo) == CVI_SUCCESS) {
+			SAMPLE_PRT("Sensor mode=%s size=%ux%u raw=%ubit snsMode=%u bin=%s\n",
+				   stModeInfo.pszModeName,
+				   stModeInfo.stSize.u32Width, stModeInfo.stSize.u32Height,
+				   stModeInfo.u8RawBitDepth, stModeInfo.u8SnsMode,
+				   stModeInfo.pszIspBinPath ? stModeInfo.pszIspBinPath :
+				   "(default)");
+		}
+	}
+
 	//Set sensor number
 	CVI_VI_SetDevNum(stIniCfg.devNum);
 	/************************************************

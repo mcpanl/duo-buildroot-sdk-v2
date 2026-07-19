@@ -2271,4 +2271,108 @@ CVI_S32 SAMPLE_COMM_SNS_ParseIni(SAMPLE_INI_CFG_S *pstIniCfg)
 
 	return CVI_SUCCESS;
 }
+
+CVI_BOOL SAMPLE_COMM_SNS_IsImx678(SAMPLE_SNS_TYPE_E enSnsType)
+{
+	return (enSnsType == SONY_IMX678_MIPI_8M_30FPS_12BIT ||
+		enSnsType == SONY_IMX678_MIPI_2M_30FPS_12BIT ||
+		enSnsType == SONY_IMX678_MIPI_2M_30FPS_10BIT_BIN)
+		? CVI_TRUE : CVI_FALSE;
+}
+
+CVI_S32 SAMPLE_COMM_SNS_GetModeInfo(SAMPLE_SNS_TYPE_E enSnsType,
+				    SAMPLE_SNS_MODE_INFO_S *pstInfo)
+{
+	PIC_SIZE_E enPicSize;
+	SIZE_S stSize;
+	CVI_S32 s32Ret;
+
+	if (!pstInfo)
+		return CVI_FAILURE;
+
+	memset(pstInfo, 0, sizeof(*pstInfo));
+	pstInfo->enSnsType = enSnsType;
+	pstInfo->enImx678Mode = SAMPLE_IMX678_MODE_OTHER;
+	pstInfo->u8SnsMode = 0;
+	pstInfo->u8RawBitDepth = 12;
+	pstInfo->enViBitWidth = DATA_BITWIDTH_12;
+	pstInfo->enViPixFmt = PIXEL_FORMAT_RGB_BAYER_12BPP;
+	pstInfo->pszModeName = "other";
+	pstInfo->pszIspBinPath = NULL;
+
+	s32Ret = SAMPLE_COMM_SNS_GetSize(enSnsType, &enPicSize);
+	if (s32Ret != CVI_SUCCESS)
+		return s32Ret;
+	s32Ret = SAMPLE_COMM_SNS_GetPicSize(enPicSize, &stSize);
+	if (s32Ret != CVI_SUCCESS)
+		return s32Ret;
+	pstInfo->stSize = stSize;
+
+	switch (enSnsType) {
+	case SONY_IMX678_MIPI_8M_30FPS_12BIT:
+		pstInfo->enImx678Mode = SAMPLE_IMX678_MODE_5M;
+		pstInfo->u8SnsMode = 0;
+		pstInfo->u8RawBitDepth = 12;
+		pstInfo->enViBitWidth = DATA_BITWIDTH_12;
+		pstInfo->enViPixFmt = PIXEL_FORMAT_RGB_BAYER_12BPP;
+		pstInfo->pszModeName = "5m";
+		pstInfo->pszIspBinPath = SAMPLE_ISP_BIN_IMX678_5M;
+		break;
+	case SONY_IMX678_MIPI_2M_30FPS_10BIT_BIN:
+		pstInfo->enImx678Mode = SAMPLE_IMX678_MODE_1080P_BIN;
+		pstInfo->u8SnsMode = 1;
+		pstInfo->u8RawBitDepth = 10;
+		pstInfo->enViBitWidth = DATA_BITWIDTH_10;
+		pstInfo->enViPixFmt = PIXEL_FORMAT_RGB_BAYER_10BPP;
+		pstInfo->pszModeName = "1080p_bin";
+		pstInfo->pszIspBinPath = SAMPLE_ISP_BIN_IMX678_1080P_BIN;
+		break;
+	case SONY_IMX678_MIPI_2M_30FPS_12BIT:
+		pstInfo->enImx678Mode = SAMPLE_IMX678_MODE_1080P_CROP;
+		pstInfo->u8SnsMode = 0;
+		pstInfo->u8RawBitDepth = 12;
+		pstInfo->enViBitWidth = DATA_BITWIDTH_12;
+		pstInfo->enViPixFmt = PIXEL_FORMAT_RGB_BAYER_12BPP;
+		pstInfo->pszModeName = "1080p_crop";
+		/* Crop shares 5M PQ bin placeholder until dedicated tuning exists. */
+		pstInfo->pszIspBinPath = SAMPLE_ISP_BIN_IMX678_5M;
+		break;
+	default:
+		break;
+	}
+
+	return CVI_SUCCESS;
+}
+
+CVI_S32 SAMPLE_COMM_SNS_QueryActiveMode(const SAMPLE_INI_CFG_S *pstIniCfg,
+					SAMPLE_SNS_MODE_INFO_S *pstInfo)
+{
+	if (!pstIniCfg || !pstInfo)
+		return CVI_FAILURE;
+
+	return SAMPLE_COMM_SNS_GetModeInfo(pstIniCfg->enSnsType[0], pstInfo);
+}
+
+CVI_S32 SAMPLE_COMM_SNS_QueryRuntimeMode(VI_PIPE ViPipe,
+					 SAMPLE_SNS_MODE_INFO_S *pstInfo)
+{
+	ISP_PUB_ATTR_S stPubAttr;
+	CVI_S32 s32Ret;
+
+	if (!pstInfo)
+		return CVI_FAILURE;
+
+	s32Ret = CVI_ISP_GetPubAttr(ViPipe, &stPubAttr);
+	if (s32Ret != CVI_SUCCESS)
+		return s32Ret;
+
+	/* Refresh size / snsMode from live ISP attr (keeps enum-derived fields). */
+	pstInfo->stSize.u32Width = stPubAttr.stWndRect.u32Width ?
+		stPubAttr.stWndRect.u32Width : stPubAttr.stSnsSize.u32Width;
+	pstInfo->stSize.u32Height = stPubAttr.stWndRect.u32Height ?
+		stPubAttr.stWndRect.u32Height : stPubAttr.stSnsSize.u32Height;
+	pstInfo->u8SnsMode = stPubAttr.u8SnsMode;
+
+	return CVI_SUCCESS;
+}
  

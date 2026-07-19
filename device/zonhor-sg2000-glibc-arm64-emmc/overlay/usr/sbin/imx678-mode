@@ -1,0 +1,128 @@
+#!/bin/sh
+# Switch IMX678 default sensor mode and matching ISP PQ bin.
+# Usage:
+#   imx678-mode              # show current mode
+#   imx678-mode status       # detailed status
+#   imx678-mode 1080p        # 1080p 2x2 hardware binning (full FOV, RAW10)
+#   imx678-mode 5m           # 5MP center crop (2880x1620, RAW12)
+
+SENSOR_CFG="${CVI_SENSOR_CFG:-/mnt/data/sensor_cfg.ini}"
+MODE_MARK="/mnt/data/imx678_mode"
+PRESET_DIR="/mnt/system/usr/bin"
+PARAM_DIR="/mnt/cfg/param"
+BIN_LINK="${PARAM_DIR}/cvi_sdr_bin"
+
+PRESET_1080P="${PRESET_DIR}/sensor_cfg.ini.imx678_1080p_bin"
+PRESET_5M="${PRESET_DIR}/sensor_cfg.ini.imx678_5m"
+BIN_1080P="cvi_sdr_bin_IMX678_1080P_BIN"
+BIN_5M="cvi_sdr_bin_IMX678_5M"
+
+usage() {
+	echo "Usage: imx678-mode [status|1080p|5m]"
+	echo "  (no args)/status  show current IMX678 mode"
+	echo "  1080p             1080p 2x2 binning (default)"
+	echo "  5m                5MP center crop"
+}
+
+detect_mode_from_ini() {
+	cfg="$1"
+	[ -f "$cfg" ] || { echo "unknown"; return; }
+	if grep -q 'SONY_IMX678_MIPI_2M_30FPS_10BIT_BIN' "$cfg" 2>/dev/null; then
+		echo "1080p_bin"
+	elif grep -q 'SONY_IMX678_MIPI_8M_30FPS_12BIT' "$cfg" 2>/dev/null; then
+		echo "5m"
+	elif grep -q 'SONY_IMX678_MIPI_2M_30FPS_12BIT' "$cfg" 2>/dev/null; then
+		echo "1080p_crop"
+	elif grep -q 'SONY_IMX678' "$cfg" 2>/dev/null; then
+		echo "imx678_other"
+	else
+		echo "unknown"
+	fi
+}
+
+show_status() {
+	mode="$(detect_mode_from_ini "$SENSOR_CFG")"
+	mark=""
+	[ -f "$MODE_MARK" ] && mark="$(tr -d '\n' < "$MODE_MARK")"
+	bin_tgt=""
+	if [ -L "$BIN_LINK" ]; then
+		bin_tgt="$(readlink "$BIN_LINK")"
+	elif [ -e "$BIN_LINK" ]; then
+		bin_tgt="(regular file)"
+	else
+		bin_tgt="(missing)"
+	fi
+	echo "sensor_cfg: $SENSOR_CFG"
+	if [ -f "$SENSOR_CFG" ]; then
+		grep -E '^name|^;sensor' "$SENSOR_CFG" 2>/dev/null || true
+	else
+		echo "  (file missing)"
+	fi
+	echo "detected:   $mode"
+	[ -n "$mark" ] && echo "mark file:  $MODE_MARK ($mark)"
+	echo "isp bin:    $BIN_LINK -> $bin_tgt"
+}
+
+apply_mode() {
+	mode="$1"
+	case "$mode" in
+	1080p|1080p_bin)
+		preset="$PRESET_1080P"
+		bin_name="$BIN_1080P"
+		mark="1080p_bin"
+		;;
+	5m)
+		preset="$PRESET_5M"
+		bin_name="$BIN_5M"
+		mark="5m"
+		;;
+	*)
+		echo "unknown mode: $mode" >&2
+		usage
+		return 1
+		;;
+	esac
+
+	if [ ! -f "$preset" ]; then
+		echo "preset missing: $preset" >&2
+		return 1
+	fi
+	if [ ! -f "${PARAM_DIR}/${bin_name}" ]; then
+		echo "warn: ISP bin missing: ${PARAM_DIR}/${bin_name}" >&2
+	fi
+
+	mkdir -p "$(dirname "$SENSOR_CFG")"
+	cp "$preset" "$SENSOR_CFG"
+	echo "$mark" > "$MODE_MARK"
+
+	if [ -d "$PARAM_DIR" ]; then
+		if ln -sfn "$bin_name" "$BIN_LINK" 2>/dev/null; then
+			:
+		else
+			echo "warn: cannot update $BIN_LINK (read-only rootfs?)" >&2
+			echo "      sample apps still bind the mode-specific bin at runtime" >&2
+		fi
+	fi
+
+	echo "IMX678 mode set to $mark"
+	echo "  sensor_cfg <- $preset"
+	echo "  isp bin    -> $bin_name"
+	echo "Restart camera apps (sample_sensor_lcd / CviIspTool / etc.) to apply."
+}
+
+cmd="${1:-status}"
+case "$cmd" in
+-h|--help|help)
+	usage
+	;;
+status|"")
+	show_status
+	;;
+1080p|1080p_bin|5m)
+	apply_mode "$cmd" || exit 1
+	;;
+*)
+	usage >&2
+	exit 1
+	;;
+esac

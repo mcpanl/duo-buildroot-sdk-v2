@@ -167,14 +167,27 @@ CVI_S32 SAMPLE_PLAT_VI_INIT(SAMPLE_VI_CONFIG_S *pstViConfig)
 	stPipeAttr.bYuvBypassPath = CVI_FALSE;
 	stPipeAttr.enCompressMode = pstViConfig->astViInfo[0].stChnInfo.enCompressMode;
 
+	/* Bind mode-specific ISP PQ bin before CreateIsp loads parameters. */
+	s32Ret = SAMPLE_COMM_BIN_BindSensor(pstViConfig->astViInfo[0].stSnsInfo.enSnsType);
+	if (s32Ret != CVI_SUCCESS) {
+		CVI_TRACE_LOG(CVI_DBG_WARN, "BIN_BindSensor failed %#x, use default bin\n",
+			      s32Ret);
+	}
+
 	for (i = 0; i < pstViConfig->s32WorkingViNum; i++) {
 		SAMPLE_VI_INFO_S *pstViInfo = NULL;
 		SAMPLE_SNS_TYPE_E sns_type;
+		SAMPLE_SNS_MODE_INFO_S stModeInfo;
 
 		s32DevNum  = pstViConfig->as32WorkingViId[i];
 		pstViInfo = &pstViConfig->astViInfo[s32DevNum];
 		sns_type = pstViInfo->stSnsInfo.enSnsType;
 		stPipeAttr.bYuvBypassPath = SAMPLE_COMM_VI_GetYuvBypassSts(sns_type);
+
+		if (SAMPLE_COMM_SNS_GetModeInfo(sns_type, &stModeInfo) == CVI_SUCCESS) {
+			stPipeAttr.enPixFmt = stModeInfo.enViPixFmt;
+			stPipeAttr.enBitWidth = stModeInfo.enViBitWidth;
+		}
 
 		for (j = 0; j < WDR_MAX_PIPE_NUM; j++) {
 			if (pstViInfo->stPipeInfo.aPipe[j] >= 0 && pstViInfo->stPipeInfo.aPipe[j] < VI_MAX_PIPE_NUM) {
