@@ -41,7 +41,9 @@
 #define DCS_RAMWR		0x2c
 #define DCS_MADCTL		0x36
 #define DCS_COLMOD		0x3a
+#define DCS_INVOFF		0x20
 #define DCS_INVON		0x21
+#define DCS_TEON		0x35
 
 extern const u8 jd9853_logo_data[];
 extern const u8 jd9853_logo_end[];
@@ -50,6 +52,7 @@ struct jd9853_priv {
 	struct spi_slave *slave;
 	struct gpio_desc gpio_dc;
 	struct gpio_desc gpio_reset;
+	struct gpio_desc gpio_te;
 	struct gpio_desc gpio_bl;
 	bool ready;
 	u8 wrbuf[4096];
@@ -115,8 +118,16 @@ static int jd9853_gpio_setup(struct jd9853_priv *priv, ofnode panel_node)
 		return ret;
 	}
 
+	ret = gpio_request_by_name_nodev(panel_node, "te", 0, &priv->gpio_te,
+					 GPIOD_IS_IN);
+	if (ret) {
+		printf("jd9853: request te failed (%d)\n", ret);
+		return ret;
+	}
+
 	jd9853_dbg_gpio("dc", &priv->gpio_dc);
 	jd9853_dbg_gpio("reset", &priv->gpio_reset);
+	jd9853_dbg_gpio("te", &priv->gpio_te);
 	jd9853_dbg_gpio("led", &priv->gpio_bl);
 	return 0;
 }
@@ -243,6 +254,8 @@ static int jd9853_write_reg_buf(struct jd9853_priv *priv, u8 cmd,
 
 static int jd9853_env_mirror(const char *name, int defval);
 static u8 jd9853_madctl_from_env(void);
+static int jd9853_apply_orientation(struct jd9853_priv *priv);
+static void jd9853_wait_te(struct jd9853_priv *priv);
 
 static int jd9853_init_panel(struct jd9853_priv *priv)
 {
@@ -334,7 +347,7 @@ static int jd9853_init_panel(struct jd9853_priv *priv)
 	ret = WR_REG(priv, 0xDE, 0x00);
 	if (ret)
 		return ret;
-	ret = WR_REG(priv, 0x35, 0x00);
+	ret = WR_REG(priv, DCS_TEON, 0x00);
 	if (ret)
 		return ret;
 	ret = WR_REG(priv, DCS_COLMOD, 0x05);
@@ -357,16 +370,13 @@ static int jd9853_init_panel(struct jd9853_priv *priv)
 	if (ret)
 		return ret;
 
-	printf("jd9853: DISPON + MADCTL/INVON\n");
+	printf("jd9853: DISPON + orientation\n");
 	ret = jd9853_write_cmd(priv, DCS_DISPON);
 	if (ret)
 		return ret;
 	mdelay(20);
 
-	ret = WR_REG(priv, DCS_MADCTL, jd9853_madctl_from_env());
-	if (ret)
-		return ret;
-	ret = jd9853_write_cmd(priv, DCS_INVON);
+	ret = jd9853_apply_orientation(priv);
 	if (ret)
 		return ret;
 
@@ -392,6 +402,43 @@ static u8 jd9853_madctl_from_env(void)
 	if (jd9853_env_mirror("lcd_mirror_y", LCD_MIRROR_Y_DEFAULT))
 		madctl |= BIT(7);
 	return madctl;
+}
+
+/*
+ * Match FreeRTOS jd9853_apply_orientation(): MADCTL + INVOFF/INVON + TEON.
+ * INVOFF before INVON avoids an unknown inversion state after warm reset or
+ * SPI glitches; re-apply immediately before pixel writes for boot logo.
+ */
+static int jd9853_apply_orientation(struct jd9853_priv *priv)
+{
+	u8 madctl = jd9853_madctl_from_env();
+	int ret;
+
+	ret = WR_REG(priv, DCS_MADCTL, madctl);
+	if (ret)
+		return ret;
+	ret = jd9853_write_cmd(priv, DCS_INVOFF);
+	if (ret)
+		return ret;
+	ret = jd9853_write_cmd(priv, DCS_INVON);
+	if (ret)
+		return ret;
+	return WR_REG(priv, DCS_TEON, 0x00);
+}
+
+static void jd9853_wait_te(struct jd9853_priv *priv)
+{
+	unsigned int guard = 50000;
+
+	if (!dm_gpio_is_valid(&priv->gpio_te))
+		return;
+
+	/* Match RTOS/Linux: exit active VBANK, then wait for TE rising edge */
+	while (dm_gpio_get_value(&priv->gpio_te) && guard--)
+		udelay(100);
+	guard = 50000;
+	while (!dm_gpio_get_value(&priv->gpio_te) && guard--)
+		udelay(100);
 }
 
 static int jd9853_set_addr_win(struct jd9853_priv *priv, int xs, int ys,
@@ -466,6 +513,14 @@ static int jd9853_blit_logo(struct jd9853_priv *priv)
 		       total, pixels * 2);
 		return -EINVAL;
 	}
+
+	/* Re-apply scan order right before blit (init may be ms earlier). */
+	ret = jd9853_apply_orientation(priv);
+	if (ret) {
+		printf("jd9853: apply_orientation failed (%d)\n", ret);
+		return ret;
+	}
+	jd9853_wait_te(priv);
 
 	ret = jd9853_set_addr_win(priv, 0, 0, JD9853_WIDTH - 1,
 				  JD9853_HEIGHT - 1);
