@@ -16,6 +16,7 @@
 #include "fb_lcd.h"
 #include "rgb888_rgb565.h"
 #include "perf_stats.h"
+#include "sys_status.h"
 
 #define VPSS_ALIGN 64
 #define VPSS_ALIGN_UP(x) ((((x) + VPSS_ALIGN - 1) / VPSS_ALIGN) * VPSS_ALIGN)
@@ -82,7 +83,6 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 	MMF_VERSION_S stVersion;
 	SAMPLE_INI_CFG_S stIniCfg;
 	SAMPLE_VI_CONFIG_S stViConfig;
-	PIC_SIZE_E enPicSize;
 	CVI_S32 s32Ret;
 	LOG_LEVEL_CONF_S log_conf;
 	VB_CONFIG_S stVbConf;
@@ -107,6 +107,20 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 	}
 	SAMPLE_PRT("Parse complete\n");
 
+	{
+		SAMPLE_SNS_MODE_INFO_S stModeInfo;
+
+		s32Ret = SAMPLE_COMM_SNS_QueryActiveMode(&stIniCfg, &stModeInfo);
+		if (s32Ret != CVI_SUCCESS)
+			return s32Ret;
+		g_stSensorSize = stModeInfo.stSize;
+		SAMPLE_PRT("Sensor mode=%s size=%ux%u raw=%ubit snsMode=%u bin=%s\n",
+			   stModeInfo.pszModeName,
+			   stModeInfo.stSize.u32Width, stModeInfo.stSize.u32Height,
+			   stModeInfo.u8RawBitDepth, stModeInfo.u8SnsMode,
+			   stModeInfo.pszIspBinPath ? stModeInfo.pszIspBinPath : "(default)");
+	}
+
 	CVI_VI_SetDevNum(stIniCfg.devNum);
 
 	s32Ret = SAMPLE_COMM_VI_IniToViCfg(&stIniCfg, &stViConfig);
@@ -114,14 +128,6 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 		return s32Ret;
 
 	memcpy(&g_stViConfig, &stViConfig, sizeof(SAMPLE_VI_CONFIG_S));
-
-	s32Ret = SAMPLE_COMM_VI_GetSizeBySensor(stIniCfg.enSnsType[0], &enPicSize);
-	if (s32Ret != CVI_SUCCESS)
-		return s32Ret;
-
-	s32Ret = SAMPLE_COMM_SYS_GetPicSize(enPicSize, &g_stSensorSize);
-	if (s32Ret != CVI_SUCCESS)
-		return s32Ret;
 
 	memset(&stVbConf, 0, sizeof(stVbConf));
 	u32ViBlk = vb_pool_blk_size(g_stSensorSize.u32Width, g_stSensorSize.u32Height,
@@ -406,6 +412,7 @@ int main(int argc, char **argv)
 	struct timespec perf_report_start;
 	struct timespec frame_loop_start, frame_loop_end;
 	struct timespec step_start, step_end;
+	SYS_STATUS_S sys_status;
 	CVI_BOOL first_frame_logged = CVI_FALSE;
 
 	while ((opt = getopt(argc, argv, "mfh")) != -1) {
@@ -443,6 +450,9 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	fb_lcd_clear(&fb_lcd, 0x0000);
+
+	if (sys_status_start() != 0)
+		SAMPLE_PRT("warn: status thread failed, HUD may be stale\n");
 
 	usleep(500 * 1000);
 	perf_timespec_now(&perf_report_start);
@@ -492,6 +502,12 @@ int main(int argc, char **argv)
 						    perf_elapsed_ns(&step_start, &step_end));
 
 					fb_lcd_draw_rgb565(&fb_lcd, rgb_buf, (int)fw, (int)fh);
+					sys_status_get(&sys_status);
+					fb_lcd_draw_status_hud(&fb_lcd,
+								 sys_status.battery_valid,
+								 sys_status.battery_pct,
+								 sys_status.temp_valid,
+								 sys_status.temp_c);
 				}
 			}
 
@@ -520,6 +536,8 @@ int main(int argc, char **argv)
 
 	SAMPLE_PRT("Stopped after %d frames\n", frame_count);
 
+	sys_status_stop();
+	fb_lcd_clear(&fb_lcd, 0x0000);
 	fb_lcd_close(&fb_lcd);
 	sys_mm_deinit();
 	free(rgb_buf);

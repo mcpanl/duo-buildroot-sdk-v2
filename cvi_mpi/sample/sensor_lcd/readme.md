@@ -16,10 +16,13 @@ VB pools: [0] sensor, [1] VPSS0 NV21, [2] VPSS1 RGB888.
 
 ## Prerequisites
 
-1. Place sensor config on the board:
+1. Sensor mode (default on board is 1080p 2x2 binning):
 
 ```bash
-cp /mnt/system/usr/bin/sensor_cfg.ini.imx678_5m /mnt/data/sensor_cfg.ini
+imx678-mode status
+imx678-mode 1080p    # or: imx678-mode 5m
+# equivalent manual copy still works:
+# cp /mnt/system/usr/bin/sensor_cfg.ini.imx678_1080p_bin /mnt/data/sensor_cfg.ini
 ```
 
 2. Stop other programs using `/dev/fb0` (e.g. `screen_demo.py`, `zonhor-ota-ui`).
@@ -50,7 +53,7 @@ cd cvi_mpi && rm -f component/isp/sensor/sg200x/sony_imx678/*.o lib/libsns_full.
 On the board:
 
 ```bash
-cp /mnt/system/usr/bin/sensor_cfg.ini.imx678_5m /mnt/data/sensor_cfg.ini
+imx678-mode 1080p   # or imx678-mode 5m
 killall screen_demo.py 2>/dev/null
 sample_sensor_lcd
 ```
@@ -77,3 +80,7 @@ Options:
 - Image rotated 90 degrees clockwise relative to sensor
 - Aspect ratio preserved with black letterbox bars
 - Perf: `rgb888_rgb565` should be far below the old ~87ms `nv21_rgb565` path
+
+## Related
+
+- HEVC 录像样例：`../sensor_lcd_hevc/`；5MP 录像分辨率限制见 [IMX678_HEVC_record_resolution_SG2000.md](../../../imx678_doc/IMX678_HEVC_record_resolution_SG2000.md)

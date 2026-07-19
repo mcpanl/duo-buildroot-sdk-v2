@@ -22,8 +22,17 @@ static const uint8_t g_font8[128][8] = {
 	['8'] = { 0x3C, 0x66, 0x66, 0x3C, 0x66, 0x66, 0x3C, 0x00 },
 	['9'] = { 0x3C, 0x66, 0x66, 0x3E, 0x06, 0x0C, 0x38, 0x00 },
 	['%'] = { 0x62, 0x64, 0x08, 0x10, 0x26, 0x46, 0x00, 0x00 },
-	['C'] = { 0x3C, 0x66, 0x60, 0x60, 0x60, 0x66, 0x3C, 0x00 },
+	[':'] = { 0x00, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00 },
 	['-'] = { 0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x00, 0x00 },
+	['A'] = { 0x18, 0x3C, 0x66, 0x66, 0x7E, 0x66, 0x66, 0x00 },
+	['C'] = { 0x3C, 0x66, 0x60, 0x60, 0x60, 0x66, 0x3C, 0x00 },
+	['D'] = { 0x78, 0x6C, 0x66, 0x66, 0x66, 0x6C, 0x78, 0x00 },
+	['E'] = { 0x7E, 0x60, 0x60, 0x7C, 0x60, 0x60, 0x7E, 0x00 },
+	['O'] = { 0x3C, 0x66, 0x66, 0x66, 0x66, 0x66, 0x3C, 0x00 },
+	['P'] = { 0x7C, 0x66, 0x66, 0x7C, 0x60, 0x60, 0x60, 0x00 },
+	['R'] = { 0x7C, 0x66, 0x66, 0x7C, 0x6C, 0x66, 0x66, 0x00 },
+	['S'] = { 0x3C, 0x66, 0x60, 0x3C, 0x06, 0x66, 0x3C, 0x00 },
+	['T'] = { 0x7E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00 },
 };
 
 #define HUD_TEXT_SCALE 1
@@ -64,11 +73,63 @@ static void fb_lcd_fill_rect(FB_LCD_S *fb, int x, int y, int w, int h, uint16_t 
 {
 	int yy, xx;
 
+	if (x < 0) {
+		w += x;
+		x = 0;
+	}
+	if (y < 0) {
+		h += y;
+		y = 0;
+	}
+	if (x + w > fb->width)
+		w = fb->width - x;
+	if (y + h > fb->height)
+		h = fb->height - y;
+	if (w <= 0 || h <= 0)
+		return;
+
 	for (yy = y; yy < y + h; yy++) {
 		uint16_t *row = fb_lcd_row(fb, yy);
 
 		for (xx = x; xx < x + w; xx++)
 			row[xx] = color;
+	}
+}
+
+/* Darken existing pixels for a translucent-ish panel. */
+static void fb_lcd_dim_rect(FB_LCD_S *fb, int x, int y, int w, int h)
+{
+	int yy, xx;
+
+	if (x < 0) {
+		w += x;
+		x = 0;
+	}
+	if (y < 0) {
+		h += y;
+		y = 0;
+	}
+	if (x + w > fb->width)
+		w = fb->width - x;
+	if (y + h > fb->height)
+		h = fb->height - y;
+	if (w <= 0 || h <= 0)
+		return;
+
+	for (yy = y; yy < y + h; yy++) {
+		uint16_t *row = fb_lcd_row(fb, yy);
+
+		for (xx = x; xx < x + w; xx++) {
+			uint16_t c = row[xx];
+			uint16_t r = (c >> 11) & 0x1F;
+			uint16_t g = (c >> 5) & 0x3F;
+			uint16_t b = c & 0x1F;
+
+			r >>= 2;
+			g >>= 2;
+			b >>= 2;
+			row[xx] = (uint16_t)((r << 11) | (g << 5) | b);
+		}
 	}
 }
 
@@ -188,6 +249,82 @@ void fb_lcd_draw_status_hud(FB_LCD_S *fb, int bat_valid, int bat_pct,
 			 FB_LCD_COLOR_BLACK);
 	fb_lcd_draw_text(fb, temp_x, temp_y, temp_text, HUD_TEXT_SCALE,
 			 FB_LCD_COLOR_CYAN, FB_LCD_COLOR_BLACK);
+}
+
+void fb_lcd_draw_rec_hud(FB_LCD_S *fb, int recording, int elapsed_sec)
+{
+	char text[16];
+	int tw, tx, ty;
+	int mm, ss;
+
+	if (!fb || !fb->fb || !recording)
+		return;
+
+	if (elapsed_sec < 0)
+		elapsed_sec = 0;
+	mm = elapsed_sec / 60;
+	ss = elapsed_sec % 60;
+	if (mm > 99)
+		mm = 99;
+
+	snprintf(text, sizeof(text), "REC %02d:%02d", mm, ss);
+	tw = fb_lcd_text_width(text, HUD_TEXT_SCALE);
+	tx = FB_LCD_HUD_INSET_X;
+	ty = FB_LCD_HUD_INSET_Y;
+
+	fb_lcd_fill_rect(fb, tx - HUD_PAD, ty - HUD_PAD, tw + HUD_PAD * 2 + 10,
+			 HUD_CHAR_H + HUD_PAD * 2, FB_LCD_COLOR_BLACK);
+	/* Red recording dot */
+	fb_lcd_fill_rect(fb, tx, ty + 2, 6, 6, FB_LCD_COLOR_RED);
+	fb_lcd_draw_text(fb, tx + 10, ty, text, HUD_TEXT_SCALE,
+			 FB_LCD_COLOR_RED, FB_LCD_COLOR_BLACK);
+}
+
+void fb_lcd_draw_menu(FB_LCD_S *fb, int recording, FB_LCD_BTN_S *btn)
+{
+	const char *label;
+	uint16_t btn_fg;
+	uint16_t btn_bg;
+	int menu_y0;
+	int btn_w, btn_h, btn_x, btn_y;
+	int tw, scale = 1;
+
+	if (!fb || !fb->fb)
+		return;
+
+	menu_y0 = fb->height / 2;
+	fb_lcd_dim_rect(fb, 0, menu_y0, fb->width, fb->height - menu_y0);
+	fb_lcd_fill_rect(fb, 0, menu_y0, fb->width, 2, FB_LCD_COLOR_GRAY);
+
+	if (recording) {
+		label = "STOP";
+		btn_bg = FB_LCD_COLOR_RED;
+		btn_fg = FB_LCD_COLOR_WHITE;
+	} else {
+		label = "RECORD";
+		btn_bg = FB_LCD_COLOR_GREEN;
+		btn_fg = FB_LCD_COLOR_BLACK;
+	}
+
+	tw = fb_lcd_text_width(label, scale);
+	btn_w = tw + 24;
+	btn_h = HUD_CHAR_H + 20;
+	if (btn_w > fb->width - 20)
+		btn_w = fb->width - 20;
+	btn_x = (fb->width - btn_w) / 2;
+	btn_y = menu_y0 + (fb->height - menu_y0 - btn_h) / 2;
+
+	fb_lcd_fill_rect(fb, btn_x, btn_y, btn_w, btn_h, btn_bg);
+	fb_lcd_draw_text(fb, btn_x + (btn_w - tw) / 2,
+			 btn_y + (btn_h - HUD_CHAR_H) / 2, label, scale,
+			 btn_fg, btn_bg);
+
+	if (btn) {
+		btn->x = btn_x;
+		btn->y = btn_y;
+		btn->w = btn_w;
+		btn->h = btn_h;
+	}
 }
 
 int fb_lcd_open(FB_LCD_S *fb)

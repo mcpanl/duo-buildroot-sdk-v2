@@ -60,6 +60,9 @@ ifneq ($(FLASH_SIZE_SHRINK),y)
 	@if [ -f sample/sensor_lcd/sample_sensor_lcd ]; then \
 		cp -f sample/sensor_lcd/sample_sensor_lcd $(DESTDIR)/usr/bin; \
 	fi
+	@if [ -f sample/sensor_lcd_hevc/sample_sensor_lcd_hevc ]; then \
+		cp -f sample/sensor_lcd_hevc/sample_sensor_lcd_hevc $(DESTDIR)/usr/bin; \
+	fi
 
 	@if [ -f sample/sample_panel/sample_panel ]; then \
 		cp -f sample/sample_panel/sample_panel $(DESTDIR)/usr/bin; \
