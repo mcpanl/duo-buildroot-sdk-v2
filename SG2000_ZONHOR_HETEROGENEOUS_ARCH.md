@@ -21,6 +21,7 @@ SG2000（CV181x 系列）是 **三颗逻辑 CPU 槽位** 的异构 SoC，通过 
 - 大核 **ARM / RISC-V 互斥**：同一时刻只有一个跑 Linux（U-Boot + Kernel + 用户态）。
 - 小核 C906L **永远存在**，但 **不是通用 Linux CPU**：SDK 仅提供 FreeRTOS（`cvirtos`），专做媒体/实时协处理。
 - 工程上「小核只能跑 RTOS」体现为：仅 **2MB 代码区** + 预定义驱动栈 + 无 Linux 生态，而非硬件不能执行其他指令。
+- **RTC 8051 MCU**（常电域）已合入主仓 `mcu51/`：开机由 `S30mcu51` 加载，支持 `/mnt/data/mcu51` 热更新。详见 `mcu51/README.md`。
 
 相关配置：
 

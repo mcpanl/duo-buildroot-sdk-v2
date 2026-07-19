@@ -57,6 +57,27 @@ flowchart TB
 | `sensor_cfg.ini.imx678_1080p_bin` | `SONY_IMX678_MIPI_2M_30FPS_10BIT_BIN` | 硬件 **2×2 融合**（全 FOV，期望 MIPI ~1920×1080 RAW10） |
 | `sensor_cfg.ini.imx678_5m` | `SONY_IMX678_MIPI_8M_30FPS_12BIT` | 中心裁剪 2880×1620（SG2000 5MP 上限） |
 
+**默认模式**：出厂 `/mnt/data/sensor_cfg.ini` 与 `/mnt/cfg/param/cvi_sdr_bin` 指向 **1080p 2×2 融合**。
+
+### ISP 调优 bin（按模式）
+
+| 文件 | 用途 |
+|------|------|
+| `/mnt/cfg/param/cvi_sdr_bin_IMX678_1080P_BIN` | 1080p 2×2 融合 PQ（初始为 GC2083 占位，可自行替换） |
+| `/mnt/cfg/param/cvi_sdr_bin_IMX678_5M` | 5MP 裁切 PQ（同上） |
+| `/mnt/cfg/param/cvi_sdr_bin` | 软链接，默认 → `cvi_sdr_bin_IMX678_1080P_BIN` |
+
+`sample_sensor_*` 启动时会按 `sensor_cfg.ini` 中的 sensor name 自动绑定对应 bin。
+
+### 快捷切换
+
+```bash
+imx678-mode status    # 查看当前模式
+imx678-mode 1080p     # 1080p 2x2 融合（默认）
+imx678-mode 5m        # 5MP 中心裁切
+# 切换后需重启 camera 进程
+```
+
 ### 融合模式寄存器要点
 
 - `ADDMODE(0x301B)=1`，`WINMODE(0x3018)=4`
@@ -67,7 +88,7 @@ flowchart TB
 ### 启用与验证
 
 ```bash
-cp /mnt/system/usr/bin/sensor_cfg.ini.imx678_1080p_bin /mnt/data/sensor_cfg.ini
+imx678-mode 1080p
 # 期望 Init: ===IMX678 1080P30fps 10bit LINE(bin) Init OK!=== ADDMODE=0x1 ...
 # 期望 mipi-rx 帧尺寸约 1920x1080（非 3856x2180）
 python3 zonhor-imx678-debug-collect.py
@@ -76,5 +97,7 @@ python3 zonhor-imx678-debug-collect.py
 细节与踩坑见 `cvi_mpi/component/isp/sensor/sg200x/sony_imx678/PORTING_NOTES_SG2000.md` §7。
 
 **颜色偏红蓝 / 三行一起错**：见 [IMX678_BAYER_RGGB_color_fix.md](./IMX678_BAYER_RGGB_color_fix.md)（ISP Bayer RGGB 配错，勿用 B-G-R workaround 掩盖）。
+
+**5MP HEVC 录像黑屏 / 文件极小 / 分辨率上限**：见 [IMX678_HEVC_record_resolution_SG2000.md](./IMX678_HEVC_record_resolution_SG2000.md)（`sample_sensor_lcd_hevc` 在 SG2000 上 VPSS 全宽 ROT90 的限制与扫频结论）。
 
 **CviIspTool `vi init failed` 专项排障**（配置 + 符号抢占 + 部署）：见 [CviIspTool_IMX678_BIN_troubleshooting.md](./CviIspTool_IMX678_BIN_troubleshooting.md)。
