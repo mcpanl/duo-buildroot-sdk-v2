@@ -126,11 +126,7 @@ static int display_open_spi(void)
 	g_shm->rtos_ready = 1;
 	flush_dcache_range((uintptr_t)g_shm, 64);
 
-	/* Proof of life once Linux+RTOS handshake is complete */
-	jd9853_wait_te();
-	jd9853_fill_color(0x07E0);
-	printf("display: self-test green OK (te=%u)\n",
-	       (unsigned)g_shm->te_sync_cnt);
+	printf("display: spi ready\n");
 	return 0;
 }
 
@@ -163,7 +159,14 @@ void prvDisplayRunTask(void *pvParameters)
 					display_flush_frame();
 					break;
 				case DISPLAY_CMD_BL:
-					jd9853_set_backlight(rtos_cmdq.param_ptr ? 1 : 0);
+					/*
+					 * Linux cv181x_zonhor_lcd_bl owns GPIOA20
+					 * soft-PWM. Keep cmd as no-op so RTOS does
+					 * not fight the PWM edge. Init still turns
+					 * BL on once via jd9853_panel_init().
+					 */
+					if (g_shm)
+						g_shm->bl_on = rtos_cmdq.param_ptr ? 1 : 0;
 					break;
 				case DISPLAY_CMD_MIRROR:
 					display_sync_mirror_from_shm();

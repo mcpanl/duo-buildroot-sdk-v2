@@ -1,0 +1,95 @@
+#!/bin/sh
+# Zonhor FreeRTOS (C906L) performance stats helper.
+# Reads debugfs nodes exported by zonhor_lcd_proxy.
+#
+# Usage:
+#   zonhor-rtos-stats summary
+#   zonhor-rtos-stats fps
+#   zonhor-rtos-stats export [-o /tmp/rtos_stats.csv]
+#   zonhor-rtos-stats interval
+
+set -eu
+
+DBGFS_ROOT="/sys/kernel/debug/rtos_stats"
+CMD=${1:-summary}
+
+die() {
+	echo "zonhor-rtos-stats: $*" >&2
+	exit 1
+}
+
+need_dbgfs() {
+	if [ ! -d "$DBGFS_ROOT" ]; then
+		die "debugfs $DBGFS_ROOT missing (is cv181x_zonhor_lcd_proxy.ko loaded? mount debugfs?)"
+	fi
+}
+
+cmd_summary() {
+	need_dbgfs
+	cat "$DBGFS_ROOT/summary"
+}
+
+cmd_fps() {
+	need_dbgfs
+	cat "$DBGFS_ROOT/fps"
+}
+
+cmd_interval() {
+	need_dbgfs
+	cat "$DBGFS_ROOT/interval_ms"
+}
+
+cmd_export() {
+	out="/tmp/rtos_stats.csv"
+	shift || true
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		-o|--output)
+			[ $# -ge 2 ] || die "export: -o needs a path"
+			out=$2
+			shift 2
+			;;
+		*)
+			die "export: unknown arg: $1"
+			;;
+		esac
+	done
+	need_dbgfs
+	cat "$DBGFS_ROOT/history" >"$out"
+	echo "wrote $out"
+	# Print a one-line FPS hint from the last data row
+	tail -n 1 "$out" | awk -F, '
+		NR==1 && $1 ~ /^[0-9]/ {
+			fps=$6/100.0
+			printf "latest: t=%sms cpu=%s%% heap_free=%skb fps=%.2f\n", $1,$2,$4,fps
+		}'
+}
+
+case "$CMD" in
+summary)
+	cmd_summary
+	;;
+fps)
+	cmd_fps
+	;;
+interval)
+	cmd_interval
+	;;
+export)
+	cmd_export "$@"
+	;;
+-h|--help|help)
+	cat <<EOF
+Usage: zonhor-rtos-stats <command>
+
+Commands:
+  summary              Print latest CPU / heap / FPS / tasks
+  fps                  Print 15s FPS time series (CSV)
+  export [-o FILE]     Export full 15s history CSV (default /tmp/rtos_stats.csv)
+  interval             Print sample interval in ms
+EOF
+	;;
+*)
+	die "unknown command: $CMD (try --help)"
+	;;
+esac

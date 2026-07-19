@@ -30,6 +30,7 @@
 
 #include "riscv-virt.h"
 #include "arch_cpu.h"
+#include "arch_time.h"
 /*-----------------------------------------------------------
  * Application specific definitions.
  *
@@ -65,7 +66,9 @@
 #define configTOTAL_HEAP_SIZE			( ( size_t ) 1 * 650 * 1024 )
 #endif
 #define configMAX_TASK_NAME_LEN			( 16 )
-#define configUSE_TRACE_FACILITY		0
+/* Required for uxTaskGetSystemState() used by rtos_stats */
+#define configUSE_TRACE_FACILITY		1
+#define configUSE_STATS_FORMATTING_FUNCTIONS	0
 #define configUSE_16_BIT_TICKS			0
 #define configUSE_TICKLESS_IDLE         0
 #define configIDLE_SHOULD_YIELD			1
@@ -78,7 +81,9 @@
 #define configUSE_COUNTING_SEMAPHORES	1
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 1
 #define configUSE_STATIC_ALLOCATION	1
-#define configGENERATE_RUN_TIME_STATS	0
+#define configGENERATE_RUN_TIME_STATS	1
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS()
+#define portGET_RUN_TIME_COUNTER_VALUE()	GetSysTime()
 #define configSUPPORT_STATIC_ALLOCATION 1
 #define configAPPLICATION_ALLOCATED_HEAP 1
 //#define configSUPPORT_DYNAMIC_ALLOCATION 1
@@ -116,6 +121,7 @@ to exclude the API function. */
 #define INCLUDE_xTaskAbortDelay				1
 #define INCLUDE_xTaskGetHandle				1
 #define INCLUDE_xSemaphoreGetMutexHolder	1
+#define INCLUDE_uxTaskGetStackHighWaterMark	1
 
 #define fabs(x) __builtin_fabs(x)
 

@@ -2,6 +2,7 @@
 /*
  * Zonhor LCD proxy framebuffer: exposes /dev/fb0 backed by display_shm,
  * while FreeRTOS owns SPI3 + TE refresh when cvi.lcd_owner=rtos.
+ * Also exports FreeRTOS performance stats via debugfs (rtos_stats).
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -18,8 +19,11 @@
 #include <linux/mutex.h>
 #include <linux/vmalloc.h>
 #include <linux/device.h>
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
 
 #include "display_shm.h"
+#include "rtos_stats_shm.h"
 #include "rtos_cmdqu.h"
 
 #define DRVNAME		"zonhor_lcd_proxy"
@@ -28,11 +32,13 @@
 struct zonhor_lcd {
 	struct fb_info *info;
 	struct display_shm *shm;
+	struct rtos_stats_shm *stats;
 	phys_addr_t phys;
 	size_t map_size;
 	void *vmem;
 	struct mutex lock;
 	struct fb_deferred_io defio;
+	struct dentry *dbg_dir;
 };
 
 static struct zonhor_lcd *g_lcd;
@@ -141,21 +147,41 @@ static ssize_t zonhor_lcd_write(struct fb_info *info, const char __user *buf,
 	return ret;
 }
 
-static int zonhor_lcd_blank(int blank, struct fb_info *info)
+/* Provided by cv181x_zonhor_lcd_bl.ko when loaded */
+extern int zonhor_lcd_bl_set_enable(int on) __attribute__((weak));
+
+/*
+ * Prefer Linux soft-PWM backlight. Fall back to RTOS DISPLAY_CMD_BL only if
+ * that module is not loaded.
+ */
+static void zonhor_lcd_set_bl(struct zonhor_lcd *lcd, int on)
 {
-	cmdqu_t cmdq = { 0 };
-	struct zonhor_lcd *lcd = info->par;
-
-	cmdq.ip_id = IP_DISPLAY;
-	cmdq.cmd_id = DISPLAY_CMD_BL;
-	cmdq.resv.valid.linux_valid = 1;
-	cmdq.param_ptr = (blank == FB_BLANK_UNBLANK) ? 1 : 0;
-	(void)rtos_cmdqu_send(&cmdq);
-
-	if (lcd->shm) {
-		lcd->shm->bl_on = cmdq.param_ptr ? 1 : 0;
+	if (lcd && lcd->shm) {
+		lcd->shm->bl_on = on ? 1 : 0;
 		wmb();
 	}
+
+	if (zonhor_lcd_bl_set_enable) {
+		(void)zonhor_lcd_bl_set_enable(on);
+		return;
+	}
+
+	{
+		cmdqu_t cmdq = { 0 };
+
+		cmdq.ip_id = IP_DISPLAY;
+		cmdq.cmd_id = DISPLAY_CMD_BL;
+		cmdq.resv.valid.linux_valid = 1;
+		cmdq.param_ptr = on ? 1 : 0;
+		(void)rtos_cmdqu_send(&cmdq);
+	}
+}
+
+static int zonhor_lcd_blank(int blank, struct fb_info *info)
+{
+	struct zonhor_lcd *lcd = info->par;
+
+	zonhor_lcd_set_bl(lcd, blank == FB_BLANK_UNBLANK);
 	return 0;
 }
 
@@ -256,6 +282,241 @@ static ssize_t mirror_y_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RW(mirror_y);
 
+/* ---- RTOS stats debugfs ---- */
+
+static struct rtos_stats_shm *zonhor_stats_ptr(struct zonhor_lcd *lcd)
+{
+	if (!lcd || !lcd->stats)
+		return NULL;
+	if (lcd->stats->magic != RTOS_STATS_SHM_MAGIC)
+		return NULL;
+	return lcd->stats;
+}
+
+static int zonhor_stats_read_sample(struct rtos_stats_shm *st, u32 idx,
+				    struct rtos_stats_sample *out)
+{
+	u32 seq1, seq2;
+	int tries = 0;
+
+	do {
+		seq1 = READ_ONCE(st->seq);
+		if (seq1 & 1) {
+			cpu_relax();
+			continue;
+		}
+		memcpy(out, &st->samples[idx], sizeof(*out));
+		/* Ensure compiler does not reorder around seq check */
+		rmb();
+		seq2 = READ_ONCE(st->seq);
+		if (seq1 == seq2 && !(seq2 & 1))
+			return 0;
+	} while (++tries < 8);
+
+	return -EAGAIN;
+}
+
+static int zonhor_stats_latest_idx(struct rtos_stats_shm *st, u32 *idx_out)
+{
+	u64 total;
+	u32 cap, write_idx;
+
+	if (!st || st->version != RTOS_STATS_SHM_VERSION)
+		return -ENODEV;
+
+	cap = st->ring_capacity;
+	if (!cap || cap > RTOS_STATS_RING_CAP)
+		cap = RTOS_STATS_RING_CAP;
+
+	total = st->total_samples;
+	if (!total)
+		return -ENODATA;
+
+	write_idx = st->write_idx % cap;
+	*idx_out = (write_idx + cap - 1) % cap;
+	return 0;
+}
+
+static int zonhor_stats_summary_show(struct seq_file *m, void *v)
+{
+	struct zonhor_lcd *lcd = m->private;
+	struct rtos_stats_shm *st;
+	struct rtos_stats_sample s;
+	u32 idx;
+	int ret, i;
+
+	st = zonhor_stats_ptr(lcd);
+	if (!st) {
+		seq_puts(m, "rtos_stats: not ready (magic missing)\n");
+		return 0;
+	}
+
+	ret = zonhor_stats_latest_idx(st, &idx);
+	if (ret) {
+		seq_puts(m, "rtos_stats: no samples yet\n");
+		return 0;
+	}
+
+	ret = zonhor_stats_read_sample(st, idx, &s);
+	if (ret) {
+		seq_puts(m, "rtos_stats: read busy\n");
+		return 0;
+	}
+
+	seq_printf(m,
+		   "timestamp_ms=%u cpu_pct=%u heap_total_kb=%u heap_free_kb=%u "
+		   "heap_min_free_kb=%u display_fps=%u.%02u display_ready=%u "
+		   "te_sync_cnt=%u frame_seq=%u total_samples=%llu\n",
+		   s.timestamp_ms, s.cpu_usage_pct, s.heap_total_kb,
+		   s.heap_free_kb, s.heap_min_free_kb,
+		   s.display_fps_x100 / 100, s.display_fps_x100 % 100,
+		   s.display_ready, s.te_sync_cnt, s.frame_seq,
+		   (unsigned long long)st->total_samples);
+
+	seq_puts(m, "tasks:\n");
+	for (i = 0; i < s.task_count && i < RTOS_STATS_MAX_TASKS; i++) {
+		seq_printf(m, "  %-16s cpu=%3u%% state=%u stack_hwm=%u\n",
+			   s.tasks[i].name, s.tasks[i].cpu_pct,
+			   s.tasks[i].state, s.tasks[i].stack_hwm_words);
+	}
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(zonhor_stats_summary);
+
+static int zonhor_stats_history_show(struct seq_file *m, void *v)
+{
+	struct zonhor_lcd *lcd = m->private;
+	struct rtos_stats_shm *st;
+	struct rtos_stats_sample s;
+	u64 total;
+	u32 cap, write_idx, start, n, i, j, idx;
+
+	st = zonhor_stats_ptr(lcd);
+	if (!st) {
+		seq_puts(m, "# rtos_stats not ready\n");
+		return 0;
+	}
+
+	cap = st->ring_capacity;
+	if (!cap || cap > RTOS_STATS_RING_CAP)
+		cap = RTOS_STATS_RING_CAP;
+	total = st->total_samples;
+	if (!total) {
+		seq_puts(m, "# no samples\n");
+		return 0;
+	}
+
+	n = (total < cap) ? (u32)total : cap;
+	write_idx = st->write_idx % cap;
+	start = (write_idx + cap - n) % cap;
+
+	seq_puts(m,
+		 "timestamp_ms,cpu_pct,heap_total_kb,heap_free_kb,heap_min_free_kb,"
+		 "display_fps_x100,te_sync_cnt,frame_seq,display_ready,task_count");
+	for (j = 0; j < RTOS_STATS_MAX_TASKS; j++)
+		seq_printf(m, ",task%u_name,task%u_cpu,task%u_state,task%u_stack",
+			   j, j, j, j);
+	seq_putc(m, '\n');
+
+	for (i = 0; i < n; i++) {
+		idx = (start + i) % cap;
+		if (zonhor_stats_read_sample(st, idx, &s))
+			continue;
+		seq_printf(m, "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
+			   s.timestamp_ms, s.cpu_usage_pct, s.heap_total_kb,
+			   s.heap_free_kb, s.heap_min_free_kb,
+			   s.display_fps_x100, s.te_sync_cnt, s.frame_seq,
+			   s.display_ready, s.task_count);
+		for (j = 0; j < RTOS_STATS_MAX_TASKS; j++) {
+			if (j < s.task_count)
+				seq_printf(m, ",%s,%u,%u,%u",
+					   s.tasks[j].name, s.tasks[j].cpu_pct,
+					   s.tasks[j].state,
+					   s.tasks[j].stack_hwm_words);
+			else
+				seq_puts(m, ",,,,");
+		}
+		seq_putc(m, '\n');
+	}
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(zonhor_stats_history);
+
+static int zonhor_stats_fps_show(struct seq_file *m, void *v)
+{
+	struct zonhor_lcd *lcd = m->private;
+	struct rtos_stats_shm *st;
+	struct rtos_stats_sample s;
+	u64 total;
+	u32 cap, write_idx, start, n, i, idx;
+
+	st = zonhor_stats_ptr(lcd);
+	if (!st) {
+		seq_puts(m, "# rtos_stats not ready\n");
+		return 0;
+	}
+
+	cap = st->ring_capacity;
+	if (!cap || cap > RTOS_STATS_RING_CAP)
+		cap = RTOS_STATS_RING_CAP;
+	total = st->total_samples;
+	if (!total) {
+		seq_puts(m, "# no samples\n");
+		return 0;
+	}
+
+	n = (total < cap) ? (u32)total : cap;
+	write_idx = st->write_idx % cap;
+	start = (write_idx + cap - n) % cap;
+
+	seq_puts(m, "timestamp_ms,display_fps_x100,te_sync_cnt,frame_seq\n");
+	for (i = 0; i < n; i++) {
+		idx = (start + i) % cap;
+		if (zonhor_stats_read_sample(st, idx, &s))
+			continue;
+		seq_printf(m, "%u,%u,%u,%u\n", s.timestamp_ms,
+			   s.display_fps_x100, s.te_sync_cnt, s.frame_seq);
+	}
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(zonhor_stats_fps);
+
+static int zonhor_stats_interval_show(struct seq_file *m, void *v)
+{
+	struct zonhor_lcd *lcd = m->private;
+	struct rtos_stats_shm *st = zonhor_stats_ptr(lcd);
+
+	if (!st)
+		seq_printf(m, "%u\n", RTOS_STATS_SAMPLE_INTERVAL_MS);
+	else
+		seq_printf(m, "%u\n", st->sample_interval_ms);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(zonhor_stats_interval);
+
+static void zonhor_stats_debugfs_init(struct zonhor_lcd *lcd)
+{
+	lcd->dbg_dir = debugfs_create_dir("rtos_stats", NULL);
+	if (IS_ERR_OR_NULL(lcd->dbg_dir)) {
+		lcd->dbg_dir = NULL;
+		return;
+	}
+	debugfs_create_file("summary", 0444, lcd->dbg_dir, lcd,
+			    &zonhor_stats_summary_fops);
+	debugfs_create_file("history", 0444, lcd->dbg_dir, lcd,
+			    &zonhor_stats_history_fops);
+	debugfs_create_file("fps", 0444, lcd->dbg_dir, lcd,
+			    &zonhor_stats_fps_fops);
+	debugfs_create_file("interval_ms", 0444, lcd->dbg_dir, lcd,
+			    &zonhor_stats_interval_fops);
+}
+
+static void zonhor_stats_debugfs_exit(struct zonhor_lcd *lcd)
+{
+	debugfs_remove_recursive(lcd->dbg_dir);
+	lcd->dbg_dir = NULL;
+}
+
 static int zonhor_lcd_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -291,10 +552,18 @@ static int zonhor_lcd_probe(struct platform_device *pdev)
 		dev_err(dev, "display_shm region too small\n");
 		return -ENOMEM;
 	}
+	if (lcd->map_size < RTOS_STATS_SHM_OFFSET + sizeof(struct rtos_stats_shm)) {
+		dev_err(dev, "display_shm too small for rtos_stats @0x%x\n",
+			RTOS_STATS_SHM_OFFSET);
+		return -ENOMEM;
+	}
 
 	lcd->shm = memremap(lcd->phys, lcd->map_size, MEMREMAP_WC);
 	if (!lcd->shm)
 		return -ENOMEM;
+
+	lcd->stats = (struct rtos_stats_shm *)((u8 *)lcd->shm +
+					       RTOS_STATS_SHM_OFFSET);
 
 	if (lcd->shm->magic != DISPLAY_SHM_MAGIC) {
 		dev_warn(dev, "display_shm magic missing, initializing\n");
@@ -386,11 +655,14 @@ static int zonhor_lcd_probe(struct platform_device *pdev)
 	device_create_file(dev, &dev_attr_mirror_x);
 	device_create_file(dev, &dev_attr_mirror_y);
 
+	zonhor_stats_debugfs_init(lcd);
+
 	platform_set_drvdata(pdev, lcd);
 	g_lcd = lcd;
 	dev_info(dev,
-		 "fb%d: zonhor lcd proxy %dx%d RGB565, shm@%pa (RTOS SPI+TE)\n",
-		 info->node, DISPLAY_W, DISPLAY_H, &lcd->phys);
+		 "fb%d: zonhor lcd proxy %dx%d RGB565, shm@%pa (RTOS SPI+TE), stats@+0x%x\n",
+		 info->node, DISPLAY_W, DISPLAY_H, &lcd->phys,
+		 RTOS_STATS_SHM_OFFSET);
 	return 0;
 }
 
@@ -400,6 +672,7 @@ static int zonhor_lcd_remove(struct platform_device *pdev)
 
 	if (!lcd)
 		return 0;
+	zonhor_stats_debugfs_exit(lcd);
 	device_remove_file(&pdev->dev, &dev_attr_status);
 	device_remove_file(&pdev->dev, &dev_attr_flush);
 	device_remove_file(&pdev->dev, &dev_attr_mirror_x);

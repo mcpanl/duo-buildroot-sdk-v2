@@ -19,6 +19,7 @@
 
 #include "comm.h"
 #include "cvi_spinlock.h"
+#include "rtos_stats.h"
 
 //#define __DEBUG__
 
@@ -162,6 +163,7 @@ void main_cvirtos(void)
 #endif
 
 	main_create_tasks();
+	rtos_stats_start();
 
 	/* Start the tasks and timer running. */
 	vTaskStartScheduler();

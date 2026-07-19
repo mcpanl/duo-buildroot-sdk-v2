@@ -18,6 +18,14 @@ fi
 
 safe_insmod "$KO_DIR/cv181x_rtos_cmdqu.ko"
 safe_insmod "$KO_DIR/cv181x_fast_image.ko"
+# LCD backlight soft-PWM (GPIOA20). Load before proxy so fb blank can find it.
+if [ -f "$KO_DIR/cv181x_zonhor_lcd_bl.ko" ]; then
+	if [ -d /sys/firmware/devicetree/base/lcd-bl ]; then
+		safe_insmod "$KO_DIR/cv181x_zonhor_lcd_bl.ko" || true
+	else
+		safe_insmod "$KO_DIR/cv181x_zonhor_lcd_bl.ko" gpio=500 brightness=60 || true
+	fi
+fi
 # LCD proxy: /dev/fb0 when cvi.lcd_owner=rtos (default). Harmless no-op if module
 # refuses probe under cvi.lcd_owner=linux.
 if [ -f "$KO_DIR/cv181x_zonhor_lcd_proxy.ko" ]; then

@@ -66,6 +66,17 @@
 		memory-region = <&display_shm_reserved>;
 		status = "okay";
 	};
+
+	/*
+	 * JD9853 backlight on PAD_JTAG_CPU_TRST / GPIOA20 (active-high).
+	 * Soft-PWM under Linux for both cvi.lcd_owner=rtos and linux.
+	 */
+	zonhor_lcd_bl: lcd-bl {
+		compatible = "zonhor,lcd-bl";
+		gpios = <&porta 20 GPIO_ACTIVE_HIGH>;
+		default-brightness = <60>;
+		status = "okay";
+	};
 };
 
 &{/aliases} {
@@ -192,12 +203,12 @@
 		height = <320>;
 		rotate = <0>;
 		fps = <30>;
-		backlight = <1>;
+		/* BL GPIO owned by zonhor,lcd-bl (soft-PWM), not fbtft */
+		backlight = <0>;
 		fbtft,skip-init;
 		dc = <&portb 20 0>;
 		reset = <&portb 12 GPIO_ACTIVE_LOW>;
 		te = <&portb 11 0>;
-		led = <&porta 20 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
 };

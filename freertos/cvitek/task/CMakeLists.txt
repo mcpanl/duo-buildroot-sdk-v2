@@ -27,6 +27,7 @@ elseif (RUN_TYPE STREQUAL "CVIRTOS")
     add_subdirectory(comm)
     add_subdirectory(rgn)
     add_subdirectory(display)
+    add_subdirectory(stats)
 
 if(CONFIG_BOARD STREQUAL "cv181x_fpga" OR CONFIG_BOARD STREQUAL "cv181x_fpga_c906")
 	add_compile_definitions(FPGA_PORTING)

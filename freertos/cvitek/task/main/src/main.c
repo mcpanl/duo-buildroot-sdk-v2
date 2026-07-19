@@ -131,7 +131,9 @@ int main(void)
 	/* Configure the hardware ready to run the demo. */
 	prvSetupHardware();
 #if ( configUSE_TRACE_FACILITY == 1 )
-	vTraceEnable(TRC_START);
+	/* Init Tracealyzer recorder only; start via mailbox if needed.
+	 * configUSE_TRACE_FACILITY is also required for uxTaskGetSystemState(). */
+	xTraceInitialize();
 #endif
 	post_system_init();
 

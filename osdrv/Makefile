@@ -62,7 +62,7 @@ endif
 
 ifeq ($(CVIARCH), $(filter $(CVIARCH), CV181X))
 	KO_LIST += sys vi snsr_i2c cif vpss dwa rgn vo rtos_cmdqu fast_image cvi_vc_drv ive #motor trng
-	KO_LIST += zonhor_lcd_proxy
+	KO_LIST += zonhor_lcd_proxy zonhor_lcd_bl
 	BASE_DEP = sys
 	FB_DEP = vpss
 else ifeq ($(CVIARCH), $(filter $(CVIARCH), CV180X))
@@ -183,6 +183,10 @@ rtos_cmdqu:
 zonhor_lcd_proxy: rtos_cmdqu
 	@$(call MAKE_EXT_KO, extdrv/${@})
 	@cp -f extdrv/zonhor_lcd_proxy/*.ko $(INSTALL_DIR)/ 2>/dev/null || true
+
+zonhor_lcd_bl:
+	@$(call MAKE_EXT_KO, extdrv/${@})
+	@cp -f extdrv/zonhor_lcd_bl/*.ko $(INSTALL_DIR)/ 2>/dev/null || true
 
 trng:
 	@$(call MAKE_KO, ${INTERDRV_PATH}/${@})

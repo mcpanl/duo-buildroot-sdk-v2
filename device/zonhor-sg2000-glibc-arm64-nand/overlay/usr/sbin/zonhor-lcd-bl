@@ -1,0 +1,153 @@
+#!/bin/sh
+# Zonhor JD9853 LCD backlight (0-100%, soft-PWM via kernel).
+#
+# Works for cvi.lcd_owner=rtos and linux once cv181x_zonhor_lcd_bl.ko is loaded.
+#
+# Usage:
+#   zonhor-lcd-bl              # show current brightness
+#   zonhor-lcd-bl 60           # set 60%
+#   zonhor-lcd-bl off          # turn off (brightness 0)
+#   zonhor-lcd-bl on           # restore default (60%)
+#   zonhor-lcd-bl power on|off # blank / unblank (keeps last brightness)
+
+set -eu
+
+DEFAULT=60
+BL_NAME=zonhor-lcd-bl
+GPIO_A20=500
+
+find_bl_sysfs() {
+	# Prefer dedicated soft-PWM device
+	if [ -d "/sys/class/backlight/${BL_NAME}" ]; then
+		echo "/sys/class/backlight/${BL_NAME}"
+		return 0
+	fi
+	for p in /sys/class/backlight/*; do
+		[ -d "$p" ] || continue
+		case "$p" in
+		*/fb_jd9853*|*/jd9853*)
+			echo "$p"
+			return 0
+			;;
+		esac
+	done
+	for p in /sys/class/backlight/*; do
+		[ -f "$p/brightness" ] && echo "$p" && return 0
+	done
+	return 1
+}
+
+proxy_sysfs() {
+	for p in \
+		/sys/devices/platform/zonhor-lcd-proxy \
+		/sys/bus/platform/devices/zonhor-lcd-proxy; do
+		[ -d "$p" ] && echo "$p" && return 0
+	done
+	return 1
+}
+
+ensure_gpio_bl() {
+	G="/sys/class/gpio/gpio${GPIO_A20}"
+	if [ ! -d "$G" ]; then
+		echo "${GPIO_A20}" > /sys/class/gpio/export 2>/dev/null || true
+	fi
+	[ -d "$G" ] || return 1
+	echo out > "$G/direction" 2>/dev/null || true
+	echo "$G"
+}
+
+set_brightness() {
+	val=$1
+	if bl=$(find_bl_sysfs); then
+		# unblank when setting non-zero
+		if [ "$val" -gt 0 ] 2>/dev/null && [ -f "$bl/bl_power" ]; then
+			echo 0 > "$bl/bl_power" 2>/dev/null || true
+		fi
+		echo "$val" > "$bl/brightness"
+		return 0
+	fi
+	if proxy=$(proxy_sysfs) && [ -f "$proxy/bl_brightness" ]; then
+		echo "$val" > "$proxy/bl_brightness"
+		return 0
+	fi
+	# Last resort: GPIO on/off only (no PWM)
+	if g=$(ensure_gpio_bl); then
+		if [ "$val" -gt 0 ] 2>/dev/null; then
+			echo 1 > "$g/value"
+		else
+			echo 0 > "$g/value"
+		fi
+		echo "zonhor-lcd-bl: warn: no backlight class, GPIO on/off only" >&2
+		return 0
+	fi
+	echo "zonhor-lcd-bl: no backlight sysfs (insmod cv181x_zonhor_lcd_bl.ko?)" >&2
+	return 1
+}
+
+get_brightness() {
+	if bl=$(find_bl_sysfs); then
+		cat "$bl/brightness"
+		return 0
+	fi
+	if proxy=$(proxy_sysfs) && [ -f "$proxy/bl_brightness" ]; then
+		cat "$proxy/bl_brightness"
+		return 0
+	fi
+	if g=$(ensure_gpio_bl); then
+		v=$(cat "$g/value")
+		[ "$v" = 1 ] && echo 100 || echo 0
+		return 0
+	fi
+	echo "zonhor-lcd-bl: no backlight sysfs (insmod cv181x_zonhor_lcd_bl.ko?)" >&2
+	return 1
+}
+
+set_power() {
+	on=$1
+	if bl=$(find_bl_sysfs) && [ -f "$bl/bl_power" ]; then
+		# 0=FB_BLANK_UNBLANK, 4=FB_BLANK_POWERDOWN
+		if [ "$on" = 1 ]; then
+			echo 0 > "$bl/bl_power"
+		else
+			echo 4 > "$bl/bl_power"
+		fi
+		return 0
+	fi
+	if [ "$on" = 1 ]; then
+		set_brightness "$DEFAULT"
+	else
+		set_brightness 0
+	fi
+}
+
+cmd=${1:-show}
+
+case "$cmd" in
+show|"")
+	echo "$(get_brightness)"
+	;;
+off)
+	set_brightness 0
+	;;
+on)
+	set_brightness "$DEFAULT"
+	;;
+power)
+	sub=${2:-}
+	case "$sub" in
+	on) set_power 1 ;;
+	off) set_power 0 ;;
+	*)
+		echo "Usage: $0 power on|off" >&2
+		exit 1
+		;;
+	esac
+	;;
+[0-9]|[1-9][0-9]|100)
+	set_brightness "$cmd"
+	;;
+*)
+	echo "Usage: $0 [show|off|on|power on|power off|<0-100>]" >&2
+	exit 1
+	;;
+esac

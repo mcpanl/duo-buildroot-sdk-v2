@@ -13,6 +13,7 @@ include_directories(${CMAKE_INSTALL_INC_PREFIX}/driver/jenc)
 include_directories(${CMAKE_INSTALL_INC_PREFIX}/driver/rtos_cmdqu)
 include_directories(${CMAKE_INSTALL_INC_PREFIX}/driver/fast_image)
 include_directories(${CMAKE_INSTALL_INC_PREFIX}/hal/config)
+include_directories(${TOP_DIR}/task/stats/include)
 
 add_library(comm STATIC ${_SOURCES})
 install(TARGETS comm DESTINATION lib)

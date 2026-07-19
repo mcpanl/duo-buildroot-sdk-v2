@@ -56,6 +56,7 @@ cv181x_vi
 snsr_i2c
 cvi_mipi_rx
 cv181x_zonhor_lcd_proxy
+cv181x_zonhor_lcd_bl
 cv181x_fast_image
 cv181x_rtos_cmdqu
 "
