@@ -1,0 +1,73 @@
+#!/bin/sh
+#
+# Update 8051 firmware at runtime and reload the MCU.
+#
+# Usage:
+#   scp mars_mcu_fw.bin root@board:/mnt/data/mcu51/mars_mcu_fw.bin.new
+#   ssh root@board mcu51-update
+#   # or:
+#   mcu51-update /path/to/mars_mcu_fw.bin
+#
+
+set -eu
+
+RUNTIME_DIR=/mnt/data/mcu51
+FACTORY_FW=/lib/firmware/mcu51/mars_mcu_fw.bin
+ACTIVE_FW="${RUNTIME_DIR}/mars_mcu_fw.bin"
+NEW_FW="${RUNTIME_DIR}/mars_mcu_fw.bin.new"
+BAK_FW="${RUNTIME_DIR}/mars_mcu_fw.bin.bak"
+UP=/usr/sbin/mcu51-up
+MAX_SRAM=8192
+
+SRC="${1:-}"
+
+mkdir -p "${RUNTIME_DIR}"
+
+if [ -n "${SRC}" ]; then
+	if [ ! -f "${SRC}" ]; then
+		echo "mcu51-update: file not found: ${SRC}" >&2
+		exit 1
+	fi
+	cp -f "${SRC}" "${NEW_FW}"
+fi
+
+if [ ! -f "${NEW_FW}" ]; then
+	echo "mcu51-update: place firmware at ${NEW_FW} or pass a path" >&2
+	exit 1
+fi
+
+SIZE=$(wc -c < "${NEW_FW}" | tr -d ' ')
+if [ "${SIZE}" -le 0 ] || [ "${SIZE}" -gt "${MAX_SRAM}" ]; then
+	echo "mcu51-update: invalid size ${SIZE} (1..${MAX_SRAM})" >&2
+	rm -f "${NEW_FW}"
+	exit 1
+fi
+
+if [ -f "${ACTIVE_FW}" ]; then
+	cp -f "${ACTIVE_FW}" "${BAK_FW}"
+fi
+
+mv -f "${NEW_FW}" "${ACTIVE_FW}"
+sync
+
+echo "mcu51-update: installed ${ACTIVE_FW} (${SIZE} bytes)"
+
+if [ ! -x "${UP}" ]; then
+	echo "mcu51-update: ${UP} missing; reboot to apply" >&2
+	exit 0
+fi
+
+if "${UP}"; then
+	echo "mcu51-update: MCU reloaded OK"
+	exit 0
+fi
+
+echo "mcu51-update: reload failed, trying rollback..." >&2
+if [ -f "${BAK_FW}" ]; then
+	cp -f "${BAK_FW}" "${ACTIVE_FW}"
+	"${UP}" || true
+elif [ -f "${FACTORY_FW}" ]; then
+	rm -f "${ACTIVE_FW}"
+	"${UP}" -f "${FACTORY_FW}" || true
+fi
+exit 2

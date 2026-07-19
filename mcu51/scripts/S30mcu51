@@ -1,0 +1,69 @@
+#!/bin/sh
+#
+# Start 8051 MCU with factory or runtime-updated firmware.
+# Runs after S04data so /mnt/data may already be mounted.
+#
+
+NAME=mcu51
+UP=/usr/sbin/mcu51-up
+LEDCTL=/usr/sbin/mcu51-ledctl
+RUNTIME_DIR=/mnt/data/mcu51
+FACTORY_FW=/lib/firmware/mcu51/mars_mcu_fw.bin
+
+start() {
+	if [ ! -x "$UP" ]; then
+		echo "$NAME: $UP missing, skip"
+		return 0
+	fi
+	if [ ! -e /dev/mem ]; then
+		echo "$NAME: /dev/mem missing, skip"
+		return 0
+	fi
+	if [ ! -f "$FACTORY_FW" ] && [ ! -f "$RUNTIME_DIR/mars_mcu_fw.bin" ]; then
+		echo "$NAME: no firmware, skip"
+		return 0
+	fi
+
+	mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
+
+	# Hand USER_LED (GPIOA[18]) from gpio-leds to MCU before load.
+	if [ -x "$LEDCTL" ]; then
+		"$LEDCTL" release-led >/dev/null 2>&1 || true
+	elif [ -e /sys/class/leds/user-led/trigger ]; then
+		echo none >/sys/class/leds/user-led/trigger 2>/dev/null || true
+	fi
+
+	echo -n "Starting $NAME: "
+	if "$UP" -q; then
+		# Default blink mode: 300ms on / 700ms off
+		if [ -x "$LEDCTL" ]; then
+			"$LEDCTL" mode 0 >/dev/null 2>&1 || true
+		fi
+		echo "OK"
+	else
+		echo "FAIL"
+		return 1
+	fi
+}
+
+stop() {
+	echo "Stopping $NAME: leave running"
+}
+
+case "$1" in
+start)
+	start
+	;;
+stop)
+	stop
+	;;
+restart|reload)
+	start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
+
+exit 0

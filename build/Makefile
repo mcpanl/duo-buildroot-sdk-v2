@@ -61,6 +61,11 @@ include scripts/mmap.mk
 include scripts/rtos.mk
 
 ################################################################################
+# 8051 MCU (RTC domain) targets
+################################################################################
+include scripts/mcu51.mk
+
+################################################################################
 # fip targets
 ################################################################################
 ifeq (${CONFIG_FIP_V1},y)
@@ -578,12 +583,15 @@ endef
 # BR_ROOTFS_RAWIMAGE
 br-rootfs-prepare:export CROSS_COMPILE_KERNEL=$(patsubst "%",%,$(CONFIG_CROSS_COMPILE_KERNEL))
 br-rootfs-prepare:export CROSS_COMPILE_SDK=$(patsubst "%",%,$(CONFIG_CROSS_COMPILE_SDK))
-br-rootfs-prepare:
+br-rootfs-prepare: mcu51
 	$(call print_target)
 
 	# copy ko and mmf libs
 	${Q}mkdir -p $(BR_ROOTFS_DIR)/mnt/system
 	${Q}cp -arf ${SYSTEM_OUT_DIR}/* $(BR_ROOTFS_DIR)/mnt/system/
+
+	# install 8051 MCU firmware + helpers into rootfs staging
+	${Q}$(TOP_DIR)/mcu51/scripts/install_to_rootfs.sh $(BR_ROOTFS_DIR) $(OUTPUT_DIR)
 
 	# copy milkv buildroot overlay files
 	${Q}cp -arf $(TOP_DIR)/device/generic/br_overlay/common/* $(BR_ROOTFS_DIR)/

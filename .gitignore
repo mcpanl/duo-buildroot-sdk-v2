@@ -22,3 +22,12 @@ ncscope.*
 
 __pycache__
 .vscode
+
+# Optional Milk-V SDCC package (fetch via mcu51/scripts/fetch_sdcc.sh)
+mcu51/tools/sdcc/
+mcu51/sdcc/mars/project/base_project/obj/
+mcu51/sdcc/mars/project/base_project/output/
+mcu51/tools/mcu51_up/*.o
+mcu51/tools/mcu51_up/mcu51_up
+mcu51/tools/mcu51_ledctl/*.o
+mcu51/tools/mcu51_ledctl/mcu51_ledctl

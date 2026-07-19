@@ -117,6 +117,24 @@ function clean_rtos()
   make rtos-clean
 )}
 
+function build_mcu51()
+{(
+  print_notice "Run ${FUNCNAME[0]}() function"
+  if [ "${CONFIG_ENABLE_MCU51:-y}" = "n" ]; then
+    print_notice "CONFIG_ENABLE_MCU51=n, skip"
+    return 0
+  fi
+  cd "$BUILD_PATH" || return
+  make mcu51 || return "$?"
+)}
+
+function clean_mcu51()
+{(
+  print_notice "Run ${FUNCNAME[0]}() function"
+  cd "$BUILD_PATH" || return
+  make mcu51-clean
+)}
+
 function menuconfig_uboot()
 {(
   print_notice "Run ${FUNCNAME[0]}() function"
@@ -608,6 +626,7 @@ function build_all()
     build_pqtool_server || return $?
   fi
   pack_cfg || return $?
+  build_mcu51 || return $?
   pack_rootfs || return $?
   pack_data || return $?
   pack_system || return $?
@@ -620,6 +639,7 @@ function clean_all()
   clean_uboot
   clean_opensbi
   clean_rtos
+  clean_mcu51
   [[ "$ATF_SRC" == y ]] && clean_atf
   clean_kernel
   clean_ramdisk

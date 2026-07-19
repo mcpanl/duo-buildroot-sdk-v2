@@ -150,7 +150,7 @@ function get_toolchain()
 function milkv_is_valid_action()
 {
   case "$1" in
-    all|clean|distclean|kernel|uboot|rootfs|middleware|osdrv|pack)
+    all|clean|distclean|kernel|uboot|rootfs|middleware|osdrv|pack|mcu51)
       return 0
       ;;
     *)
@@ -173,6 +173,7 @@ function build_usage()
   echo "${BASH_SOURCE[0]} [board] rootfs            - Build rootfs and pack image"
   echo "${BASH_SOURCE[0]} [board] middleware        - Build middleware only"
   echo "${BASH_SOURCE[0]} [board] osdrv             - Build osdrv only"
+  echo "${BASH_SOURCE[0]} [board] mcu51             - Build 8051 MCU firmware + loader"
   echo "${BASH_SOURCE[0]} [board] pack              - Repack image only"
   echo ""
   echo "Notes:"
@@ -230,6 +231,10 @@ function milkv_run_action()
     osdrv)
       build_osdrv || exit 1
       show_info "Build osdrv for ${MILKV_BOARD} success!"
+      ;;
+    mcu51)
+      build_mcu51 || exit 1
+      show_info "Build mcu51 for ${MILKV_BOARD} success!"
       ;;
     pack)
       pack_upgrade || exit 1
