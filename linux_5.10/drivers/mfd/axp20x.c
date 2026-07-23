@@ -22,11 +22,13 @@
 #include <linux/mfd/axp20x.h>
 #include <linux/mfd/core.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/reboot.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
+#include <linux/string.h>
 #include <linux/syscore_ops.h>
 
 #define AXP20X_OFF	BIT(7)
@@ -936,6 +938,41 @@ static const struct mfd_cell axp2101_cells[] = {
 static struct axp20x_dev *axp20x_pm_power_off;
 
 /*
+ * Gate AXP2101 soft power-off / hard restart on U-Boot env pmic_poweroff,
+ * passed via bootargs as cvi.pmic_poweroff=${pmic_poweroff}.
+ * Default is off unless the env is explicitly set to an enable value and
+ * saved (fw_setenv / saveenv). When disabled, CVITEK RTC reboot/poweroff
+ * remains the system path.
+ */
+static bool axp2101_pmic_poweroff_enabled(void)
+{
+	struct device_node *chosen;
+	const char *bootargs = NULL;
+	const char *s;
+
+	chosen = of_find_node_by_path("/chosen");
+	if (chosen) {
+		of_property_read_string(chosen, "bootargs", &bootargs);
+		of_node_put(chosen);
+	}
+	if (!bootargs)
+		return false;
+
+	s = strstr(bootargs, "cvi.pmic_poweroff=");
+	if (!s)
+		return false;
+	s += strlen("cvi.pmic_poweroff=");
+
+	/* Accept 1 / y / yes / on (common boolean cmdline forms). */
+	if (*s == '1' || *s == 'y' || *s == 'Y')
+		return true;
+	if (!strncmp(s, "on", 2) || !strncmp(s, "ON", 2))
+		return true;
+
+	return false;
+}
+
+/*
  * AXP2101 system restart / power-off via REG10H.
  * Called from syscore_shutdown after device_shutdown() while IRQs are
  * still enabled, so I2C/regmap remains usable. On success the rails drop
@@ -1186,17 +1223,23 @@ int axp20x_device_probe(struct axp20x_dev *axp20x)
 	}
 
 	/*
-	 * AXP2101 is the board PMIC: always own power-off / restart so the
-	 * CVITEK RTC warm-reset path cannot steal pm_power_off. Restart and
-	 * power-off are primarily driven from syscore_shutdown (I2C still
-	 * works); pm_power_off is a backup for the power-off path.
+	 * AXP2101 soft power-off / restart (REG10H) is optional and gated by
+	 * U-Boot env pmic_poweroff → cmdline cvi.pmic_poweroff=. Default is
+	 * disabled so CVITEK RTC warm-reset / soft-shutdown stay in charge
+	 * unless the env is explicitly enabled and saved. When enabled,
+	 * claim pm_power_off + syscore_ops so RTC cannot steal the path.
 	 */
 	if (axp20x->variant == AXP2101_ID) {
-		axp20x_pm_power_off = axp20x;
-		pm_power_off = axp20x_power_off;
-		register_syscore_ops(&axp2101_syscore_ops);
-		dev_info(axp20x->dev,
-			 "AXP2101 registered for system restart/power-off\n");
+		if (axp2101_pmic_poweroff_enabled()) {
+			axp20x_pm_power_off = axp20x;
+			pm_power_off = axp20x_power_off;
+			register_syscore_ops(&axp2101_syscore_ops);
+			dev_info(axp20x->dev,
+				 "AXP2101 registered for system restart/power-off (cvi.pmic_poweroff enabled)\n");
+		} else {
+			dev_info(axp20x->dev,
+				 "AXP2101 PMIC restart/power-off disabled (set U-Boot pmic_poweroff=1 && saveenv)\n");
+		}
 	} else if (!pm_power_off) {
 		axp20x_pm_power_off = axp20x;
 		pm_power_off = axp20x_power_off;
