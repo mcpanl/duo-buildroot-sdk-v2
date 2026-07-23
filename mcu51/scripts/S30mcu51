@@ -34,7 +34,8 @@ start() {
 
 	echo -n "Starting $NAME: "
 	# Default: skip SRAM rewrite if MCU already running (VBAT keep-alive).
-	# Use: mcu51-up -F  to force reload after a firmware update.
+	# This preserves RTC_INFO2 run_ms and other mailbox values across reboot.
+	# Use: mcu51-up -F  ONLY after a firmware update (that path clears RTC_INFO2).
 	if "$UP" -q; then
 		# Default blink mode: 300ms on / 700ms off (preserves HB bits)
 		if [ -x "$LEDCTL" ]; then

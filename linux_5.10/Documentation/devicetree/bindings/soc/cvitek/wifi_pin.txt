@@ -1,6 +1,17 @@
-sCvitek wifi pin driver
+Cvitek wifi pin driver
 
 Required properties:
 - compatible: "cvitek,wifi-pin"
-- power-gpio: Wifi chip power on gpio
-- wakeup-gpio: Wifi chip wakeup gpio
+- poweron-gpio: Wifi chip / module total power on gpio
+
+Optional properties:
+- wakeup-gpio: Wifi -> SoC wake IRQ gpio (WIFI_WAKE_HOST)
+- host-wake-gpio: SoC -> Wifi wake gpio (HOST_WAKE_WF)
+
+Example:
+	wifi_pin {
+		compatible = "cvitek,wifi-pin";
+		poweron-gpio = <&porta 15 GPIO_ACTIVE_HIGH>;
+		host-wake-gpio = <&porte 3 GPIO_ACTIVE_HIGH>;
+		wakeup-gpio = <&porte 5 GPIO_ACTIVE_HIGH>;
+	};

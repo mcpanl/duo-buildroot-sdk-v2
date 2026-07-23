@@ -392,7 +392,7 @@ static ssize_t bluesleep_write_proc_btwrite(struct file *file,
 	return count;
 }
 
-#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 10, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
 static const struct proc_ops lpm_fops = {
 	.proc_open	= bluesleep_lpm_proc_open,
 	.proc_read	= seq_read,
@@ -423,6 +423,118 @@ static const struct file_operations btwrite_fops = {
 	.llseek		= seq_lseek,
 	.release	= single_release,
 	.write		= bluesleep_write_proc_btwrite,
+};
+#endif
+
+static int bluesleep_btwake_show(struct seq_file *m, void *v)
+{
+	if (!bsi)
+		return -ENODEV;
+	seq_printf(m, "%u\n",
+		   (gpio_get_value(bsi->ext_wake) == bsi->ext_wake_assert));
+	return 0;
+}
+
+static int bluesleep_btwake_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, bluesleep_btwake_show, NULL);
+}
+
+static ssize_t bluesleep_btwake_write(struct file *file, const char __user *buffer,
+				      size_t count, loff_t *ppos)
+{
+	char b;
+
+	if (!bsi || count < 1)
+		return -EINVAL;
+	if (copy_from_user(&b, buffer, 1))
+		return -EFAULT;
+	if (b == '0')
+		gpio_set_value(bsi->ext_wake, !bsi->ext_wake_assert);
+	else if (b == '1')
+		gpio_set_value(bsi->ext_wake, bsi->ext_wake_assert);
+	else
+		return -EINVAL;
+	return count;
+}
+
+static int bluesleep_hostwake_show(struct seq_file *m, void *v)
+{
+	if (!bsi)
+		return -ENODEV;
+	seq_printf(m, "%u\n",
+		   (gpio_get_value(bsi->host_wake) == bsi->host_wake_assert));
+	return 0;
+}
+
+static int bluesleep_hostwake_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, bluesleep_hostwake_show, NULL);
+}
+
+static int bluesleep_status_show(struct seq_file *m, void *v)
+{
+	if (!bsi)
+		return -ENODEV;
+	seq_printf(m, "lpm_enable=%d\n", has_lpm_enabled);
+	seq_printf(m, "asleep=%d\n", test_bit(BT_ASLEEP, &flags) ? 1 : 0);
+	seq_printf(m, "bt_wake_gpio=%d level=%d assert=%d\n",
+		   bsi->ext_wake, gpio_get_value(bsi->ext_wake),
+		   bsi->ext_wake_assert);
+	seq_printf(m, "bt_hostwake_gpio=%d level=%d assert=%d irq=%d\n",
+		   bsi->host_wake, gpio_get_value(bsi->host_wake),
+		   bsi->host_wake_assert, bsi->host_wake_irq);
+	seq_printf(m, "wakeup_enable=%u\n", bsi->wakeup_enable);
+	return 0;
+}
+
+static int bluesleep_status_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, bluesleep_status_show, NULL);
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+static const struct proc_ops btwake_fops = {
+	.proc_open = bluesleep_btwake_open,
+	.proc_read = seq_read,
+	.proc_lseek = seq_lseek,
+	.proc_release = single_release,
+	.proc_write = bluesleep_btwake_write,
+};
+static const struct proc_ops hostwake_fops = {
+	.proc_open = bluesleep_hostwake_open,
+	.proc_read = seq_read,
+	.proc_lseek = seq_lseek,
+	.proc_release = single_release,
+};
+static const struct proc_ops bt_status_fops = {
+	.proc_open = bluesleep_status_open,
+	.proc_read = seq_read,
+	.proc_lseek = seq_lseek,
+	.proc_release = single_release,
+};
+#else
+static const struct file_operations btwake_fops = {
+	.owner = THIS_MODULE,
+	.open = bluesleep_btwake_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+	.write = bluesleep_btwake_write,
+};
+static const struct file_operations hostwake_fops = {
+	.owner = THIS_MODULE,
+	.open = bluesleep_hostwake_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+static const struct file_operations bt_status_fops = {
+	.owner = THIS_MODULE,
+	.open = bluesleep_status_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
 };
 #endif
 #else
@@ -763,8 +875,19 @@ static struct platform_device *sw_uart_get_pdev(int id)
 {
 	struct device_node *np;
 	char match[20];
+
 	sprintf(match, "uart%d", id);
 	np = of_find_node_by_type(NULL, match);
+	if (!np) {
+		for_each_compatible_node(np, NULL, "snps,dw-apb-uart") {
+			if (of_alias_get_id(np, "serial") == id)
+				break;
+		}
+	}
+	if (!np) {
+		BT_ERR("uart node uart%d not found\n", id);
+		return NULL;
+	}
 	return of_find_device_by_node(np);
 }
 #endif
@@ -772,11 +895,19 @@ static struct platform_device *sw_uart_get_pdev(int id)
 static int bluesleep_probe(struct platform_device *pdev)
 {
 #if 1
-	struct device_node *np = of_find_compatible_node(NULL, NULL, "allwinner,sunxi-btlpm");
+	struct device_node *np = of_find_compatible_node(NULL, NULL,
+					"allwinner,sunxi-btlpm");
 	struct device *dev = &pdev->dev;
 	enum of_gpio_flags config;
 	int ret, uart_index;
 	u32 val;
+
+	if (!np)
+		np = of_find_compatible_node(NULL, NULL, "cvitek,aic8800-btlpm");
+	if (!np) {
+		BT_ERR("btlpm DT node not found (allwinner,sunxi-btlpm / cvitek,aic8800-btlpm)\n");
+		return -ENODEV;
+	}
 
 	bsi = devm_kzalloc(&pdev->dev, sizeof(struct bluesleep_info),
 			GFP_KERNEL);
@@ -886,6 +1017,8 @@ static int bluesleep_probe(struct platform_device *pdev)
 		case 0:
 		case 1:
 		case 2:
+		case 3:
+		case 4:
 			uart_index = val;
 			break;
 		default:
@@ -894,6 +1027,9 @@ static int bluesleep_probe(struct platform_device *pdev)
 	}
 	BT_DBG("uart_index (%u)\n", uart_index);
 	bluesleep_uart_dev = sw_uart_get_pdev(uart_index);
+	if (!bluesleep_uart_dev)
+		BT_ERR("uart_index %u pdev not found; GPIO LPM still works\n",
+		       uart_index);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
 
@@ -908,6 +1044,8 @@ static int bluesleep_probe(struct platform_device *pdev)
 #endif
 	bsi->pdev = pdev;
 
+	BT_DBG("bluesleep probe ok: hostwake=%d btwake=%d irq=%d\n",
+	       bsi->host_wake, bsi->ext_wake, bsi->host_wake_irq);
 	return 0;
 
 err3:
@@ -1043,6 +1181,27 @@ int bluesleep_init(struct platform_device *pdev)
 		retval = -ENOMEM;
 		goto fail;
 	}
+
+	ent = proc_create("btwake", 0660, sleep_dir, &btwake_fops);
+	if (ent == NULL) {
+		BT_ERR("Unable to create /proc/%s/btwake entry", PROC_DIR);
+		retval = -ENOMEM;
+		goto fail;
+	}
+
+	ent = proc_create("hostwake", 0440, sleep_dir, &hostwake_fops);
+	if (ent == NULL) {
+		BT_ERR("Unable to create /proc/%s/hostwake entry", PROC_DIR);
+		retval = -ENOMEM;
+		goto fail;
+	}
+
+	ent = proc_create("status", 0440, sleep_dir, &bt_status_fops);
+	if (ent == NULL) {
+		BT_ERR("Unable to create /proc/%s/status entry", PROC_DIR);
+		retval = -ENOMEM;
+		goto fail;
+	}
 #endif
 
 	flags = 0; /* clear all status bits */
@@ -1070,6 +1229,9 @@ int bluesleep_init(struct platform_device *pdev)
 
 fail:
 #if BT_BLUEDROID_SUPPORT
+	remove_proc_entry("status", sleep_dir);
+	remove_proc_entry("hostwake", sleep_dir);
+	remove_proc_entry("btwake", sleep_dir);
 	remove_proc_entry("btwrite", sleep_dir);
 	remove_proc_entry("lpm", sleep_dir);
 #endif
@@ -1094,14 +1256,11 @@ int bluesleep_exit(struct platform_device *dev)
 #endif
 
 #if BT_BLUEDROID_SUPPORT
-	remove_proc_entry("btwrite", sleep_dir);
-	remove_proc_entry("lpm", sleep_dir);
-#endif
-#if 0
-	remove_proc_entry("asleep", sleep_dir);
-	remove_proc_entry("proto", sleep_dir);
+	remove_proc_entry("status", sleep_dir);
 	remove_proc_entry("hostwake", sleep_dir);
 	remove_proc_entry("btwake", sleep_dir);
+	remove_proc_entry("btwrite", sleep_dir);
+	remove_proc_entry("lpm", sleep_dir);
 #endif
 	remove_proc_entry("sleep", bluetooth_dir);
 	remove_proc_entry("bluetooth", 0);

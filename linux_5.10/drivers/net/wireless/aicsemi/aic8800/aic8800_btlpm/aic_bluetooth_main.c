@@ -5,8 +5,10 @@
 #include <linux/kernel.h>
 #include <linux/version.h>
 #include <linux/platform_device.h>
-#include "lpm.h"
 #include "rfkill.h"
+#if defined(CONFIG_SUPPORT_LPM)
+#include "lpm.h"
+#endif
 
 #define DRV_CONFIG_FW_NAME    "fw.bin"
 #define DRV_DESCRIPTION       "AIC BLUETOOTH"
@@ -47,7 +49,11 @@ static int __init aic_bluetooth_mod_init(void)
 		pr_err("rfkill init fail\n");
 		goto err1;
 	}
-#if defined(ANDROID_PLATFORM) && !defined(CONFIG_PLATFORM_ROCKCHIP) && !defined(CONFIG_PLATFORM_ROCKCHIP2)
+#if defined(CONFIG_SUPPORT_LPM)
+	/*
+	 * Enable bluesleep on CVITEK as well as Android platforms that
+	 * historically gated this behind ANDROID_PLATFORM.
+	 */
 	ret = bluesleep_init(aicbt_pdev);
 	if (ret) {
 		pr_err("bluesleep init fail\n");
@@ -57,7 +63,7 @@ static int __init aic_bluetooth_mod_init(void)
 
 	return 0;
 
-#if defined(ANDROID_PLATFORM) && !defined(CONFIG_PLATFORM_ROCKCHIP) && !defined(CONFIG_PLATFORM_ROCKCHIP2)
+#if defined(CONFIG_SUPPORT_LPM)
 err2:
 #endif
 	rfkill_bluetooth_remove(aicbt_pdev);
@@ -71,7 +77,7 @@ err0:
 static void __exit aic_bluetooth_mod_exit(void)
 {
 	printk("%s\n", __func__);
-#if defined(ANDROID_PLATFORM) && !defined(CONFIG_PLATFORM_ROCKCHIP) && !defined(CONFIG_PLATFORM_ROCKCHIP2)
+#if defined(CONFIG_SUPPORT_LPM)
 	bluesleep_exit(aicbt_pdev);
 #endif
 	rfkill_bluetooth_remove(aicbt_pdev);

@@ -5,6 +5,7 @@
  * Copyright 2020 CVITEK Inc.
  *
  */
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -14,11 +15,13 @@
 #include <linux/of_platform.h>
 #include <linux/of_gpio.h>
 #include <linux/delay.h>
+#include <linux/gpio.h>
 
 struct cvi_wifi_pin_dev {
 	struct device *dev;
 	int power_gpio;
 	int wakeup_gpio;
+	int host_wake_gpio;
 };
 
 static struct cvi_wifi_pin_dev *wifi_dev;
@@ -53,9 +56,23 @@ int cvi_get_wifi_wakeup_gpio(void)
 }
 EXPORT_SYMBOL_GPL(cvi_get_wifi_wakeup_gpio);
 
+int cvi_get_wifi_host_wake_gpio(void)
+{
+	if (wifi_dev) {
+		if (wifi_dev->host_wake_gpio > 0)
+			return wifi_dev->host_wake_gpio;
+
+		pr_err("Wifi host-wake pin is not available, plz check dts\n");
+		return 0;
+	}
+
+	pr_err("Wifi host-wake pin is not available, plz check wifi_pin node in dts\n");
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cvi_get_wifi_host_wake_gpio);
+
 static int cvi_wifi_pin_probe(struct platform_device *pdev)
 {
-
 	struct device_node *np = pdev->dev.of_node;
 
 	dev_dbg(&pdev->dev, "%s, dev name=%s\n", __func__, dev_name(&pdev->dev));
@@ -64,10 +81,21 @@ static int cvi_wifi_pin_probe(struct platform_device *pdev)
 	if (!wifi_dev)
 		return -ENOMEM;
 
+	wifi_dev->dev = &pdev->dev;
+	wifi_dev->power_gpio = -1;
+	wifi_dev->wakeup_gpio = -1;
+	wifi_dev->host_wake_gpio = -1;
+
 	if (np) {
 		wifi_dev->power_gpio = of_get_named_gpio(np, "poweron-gpio", 0);
 		wifi_dev->wakeup_gpio = of_get_named_gpio(np, "wakeup-gpio", 0);
+		wifi_dev->host_wake_gpio = of_get_named_gpio(np, "host-wake-gpio", 0);
 	}
+
+	dev_info(&pdev->dev,
+		 "wifi_pin: poweron=%d wakeup=%d host-wake=%d\n",
+		 wifi_dev->power_gpio, wifi_dev->wakeup_gpio,
+		 wifi_dev->host_wake_gpio);
 
 	return 0;
 }

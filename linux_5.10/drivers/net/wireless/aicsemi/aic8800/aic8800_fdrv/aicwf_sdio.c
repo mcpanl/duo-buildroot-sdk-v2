@@ -39,7 +39,13 @@
 #endif
 
 #include "aic_bsp_export.h"
+#include <linux/gpio.h>
 extern uint8_t scanning;
+
+#ifdef CONFIG_PLATFORM_CVITEK
+extern int cvi_get_wifi_wakeup_gpio(void);
+extern int cvi_get_wifi_host_wake_gpio(void);
+#endif
 
 #ifdef CONFIG_GPIO_WAKEUP
 extern int rwnx_send_me_set_lp_level(struct rwnx_hw *rwnx_hw, u8 lp_level);
@@ -241,6 +247,11 @@ int aicwf_sdio_recv_pkt(struct aic_sdio_dev *sdiodev, struct sk_buff *skbbuf,
 #ifdef CONFIG_GPIO_WAKEUP
 static int wakeup_enable;
 static u32 hostwake_irq_num;
+static int wifi_wakeup_gpio = -1;
+static int wifi_host_wake_gpio = -1;
+static int wifi_host_wake_assert = 1;
+static int wifi_suspend_active;
+static unsigned long wifi_hostwake_irq_cnt;
 #endif//CONFIG_GPIO_WAKEUP
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)//LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
@@ -333,11 +344,18 @@ void rwnx_pm_relax(struct aic_sdio_dev *sdiodev){
 
 void rwnx_set_wifi_suspend(char onoff);
 
+static void rwnx_wifi_host_wake_set(int assert)
+{
+	if (!gpio_is_valid(wifi_host_wake_gpio))
+		return;
+
+	gpio_set_value(wifi_host_wake_gpio,
+		       assert ? wifi_host_wake_assert : !wifi_host_wake_assert);
+}
 
 static irqreturn_t rwnx_hostwake_irq_handler(int irq, void *para)
 {
-	static int wake_cnt;
-	wake_cnt++;
+	wifi_hostwake_irq_cnt++;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
 	rwnx_wakeup_lock_timeout(g_rwnx_plat->sdiodev->rwnx_hw->ws_rx, 1000);
@@ -347,7 +365,8 @@ static irqreturn_t rwnx_hostwake_irq_handler(int irq, void *para)
 #endif //ANDROID_PLATFORM
 #endif
 
-	AICWFDBG(LOGIRQ, "%s(%d): wake_irq_cnt = %d\n", __func__, __LINE__, wake_cnt);
+	AICWFDBG(LOGIRQ, "%s(%d): wake_irq_cnt = %lu\n", __func__, __LINE__,
+		 wifi_hostwake_irq_cnt);
 
 #ifdef CONFIG_OOB
 #if 0//old oob feature
@@ -411,6 +430,67 @@ static int rwnx_register_hostwake_irq(struct device *dev)
             wakeup_enable = 1;
 #endif //CONFIG_PLATFORM_ROCKCHIP
 
+#ifdef CONFIG_PLATFORM_CVITEK
+	wifi_wakeup_gpio = cvi_get_wifi_wakeup_gpio();
+	wifi_host_wake_gpio = cvi_get_wifi_host_wake_gpio();
+	printk("%s CVITEK WIFI_WAKE_HOST gpio=%d HOST_WAKE_WF gpio=%d\n",
+	       __func__, wifi_wakeup_gpio, wifi_host_wake_gpio);
+
+	if (!gpio_is_valid(wifi_wakeup_gpio)) {
+		pr_err("%s: invalid WIFI_WAKE_HOST gpio\n", __func__);
+		return -EINVAL;
+	}
+
+	ret = gpio_request(wifi_wakeup_gpio, "wifi_wake_host");
+	if (ret < 0) {
+		pr_err("%s: request WIFI_WAKE_HOST gpio %d failed: %d\n",
+		       __func__, wifi_wakeup_gpio, ret);
+		return ret;
+	}
+	ret = gpio_direction_input(wifi_wakeup_gpio);
+	if (ret < 0) {
+		pr_err("%s: WIFI_WAKE_HOST gpio input failed: %d\n", __func__, ret);
+		gpio_free(wifi_wakeup_gpio);
+		wifi_wakeup_gpio = -1;
+		return ret;
+	}
+
+	hostwake_irq_num = gpio_to_irq(wifi_wakeup_gpio);
+	if (hostwake_irq_num < 0) {
+		pr_err("%s: gpio_to_irq(%d) failed: %d\n",
+		       __func__, wifi_wakeup_gpio, hostwake_irq_num);
+		gpio_free(wifi_wakeup_gpio);
+		wifi_wakeup_gpio = -1;
+		return hostwake_irq_num;
+	}
+
+	if (gpio_is_valid(wifi_host_wake_gpio)) {
+		ret = gpio_request(wifi_host_wake_gpio, "host_wake_wf");
+		if (ret < 0) {
+			pr_err("%s: request HOST_WAKE_WF gpio %d failed: %d\n",
+			       __func__, wifi_host_wake_gpio, ret);
+			gpio_free(wifi_wakeup_gpio);
+			wifi_wakeup_gpio = -1;
+			wifi_host_wake_gpio = -1;
+			return ret;
+		}
+		/* Keep WiFi awake by default until manual sleep */
+		ret = gpio_direction_output(wifi_host_wake_gpio,
+					    wifi_host_wake_assert);
+		if (ret < 0) {
+			pr_err("%s: HOST_WAKE_WF output failed: %d\n",
+			       __func__, ret);
+			gpio_free(wifi_host_wake_gpio);
+			gpio_free(wifi_wakeup_gpio);
+			wifi_host_wake_gpio = -1;
+			wifi_wakeup_gpio = -1;
+			return ret;
+		}
+	}
+
+	wakeup_enable = 1;
+	irq_flags = flag_edge;
+#endif //CONFIG_PLATFORM_CVITEK
 
 
 	if (wakeup_enable) {
@@ -427,7 +507,7 @@ static int rwnx_register_hostwake_irq(struct device *dev)
 		ret = device_init_wakeup(dev, true);
 		if (ret < 0) {
 			pr_err("%s(%d): device init wakeup failed!\n", __func__, __LINE__);
-			return ret;
+			goto fail_gpio;
 		}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0)
@@ -451,7 +531,9 @@ static int rwnx_register_hostwake_irq(struct device *dev)
 	dev_pm_clear_wake_irq(dev);
 #endif
 	rwnx_enable_hostwake_irq();
-	AICWFDBG(LOGINFO, "%s(%d)\n", __func__, __LINE__);
+	AICWFDBG(LOGINFO, "%s(%d) hostwake_irq=%u wakeup_gpio=%d host_wake_gpio=%d\n",
+		 __func__, __LINE__, hostwake_irq_num, wifi_wakeup_gpio,
+		 wifi_host_wake_gpio);
 	return ret;
 
 fail2:
@@ -469,6 +551,17 @@ fail1:
 #ifdef ANDROID_PLATFORM
 	wake_lock_destroy(&irq_wakelock);
 #endif
+#endif
+fail_gpio:
+#ifdef CONFIG_PLATFORM_CVITEK
+	if (gpio_is_valid(wifi_host_wake_gpio)) {
+		gpio_free(wifi_host_wake_gpio);
+		wifi_host_wake_gpio = -1;
+	}
+	if (gpio_is_valid(wifi_wakeup_gpio)) {
+		gpio_free(wifi_wakeup_gpio);
+		wifi_wakeup_gpio = -1;
+	}
 #endif
 #endif//CONFIG_GPIO_WAKEUP
 	return ret;
@@ -496,7 +589,18 @@ static int rwnx_unregister_hostwake_irq(struct device *dev)
 #endif //ANDROID_PLATFORM
 #endif
 	}
-	free_irq(hostwake_irq_num, NULL);
+	if (hostwake_irq_num)
+		free_irq(hostwake_irq_num, NULL);
+#ifdef CONFIG_PLATFORM_CVITEK
+	if (gpio_is_valid(wifi_host_wake_gpio)) {
+		gpio_free(wifi_host_wake_gpio);
+		wifi_host_wake_gpio = -1;
+	}
+	if (gpio_is_valid(wifi_wakeup_gpio)) {
+		gpio_free(wifi_wakeup_gpio);
+		wifi_wakeup_gpio = -1;
+	}
+#endif
 #endif//CONFIG_GPIO_WAKEUP
 	AICWFDBG(LOGINFO, "%s(%d)\n", __func__, __LINE__);
 	return 0;
@@ -2532,20 +2636,61 @@ uint8_t crc8_ponl_107(uint8_t *p_buffer, uint16_t cal_size)
 #ifdef CONFIG_WIFI_SUSPEND_FOR_LINUX
 void rwnx_set_wifi_suspend(char onoff){
 	int ret = 0;
+	struct aic_sdio_dev *sdiodev;
+
+	if (!g_rwnx_plat || !g_rwnx_plat->sdiodev || !g_rwnx_plat->sdiodev->rwnx_hw) {
+		pr_err("%s: wifi not ready\n", __func__);
+		return;
+	}
+	sdiodev = g_rwnx_plat->sdiodev;
+
 	if (onoff == '0') {
-		printk("%s resume \r\n", __func__);
-		rwnx_send_me_set_lp_level(g_rwnx_plat->sdiodev->rwnx_hw, 0);
-	}else{
-		printk("%s suspend \r\n", __func__);
-		ret = rwnx_send_me_set_lp_level(g_rwnx_plat->sdiodev->rwnx_hw, 1);
+		printk("%s resume\n", __func__);
+		rwnx_wifi_host_wake_set(1);
+		msleep(2);
+		rwnx_send_me_set_lp_level(sdiodev->rwnx_hw, 0);
+		aicwf_sdio_pwr_stctl(sdiodev, SDIO_ACTIVE_ST);
+		wifi_suspend_active = 0;
+	} else {
+		printk("%s suspend\n", __func__);
+		ret = rwnx_send_me_set_lp_level(sdiodev->rwnx_hw, 1);
 		if (!ret) {
-			aicwf_sdio_pwr_stctl(g_rwnx_plat->sdiodev, SDIO_SLEEP_ST);
-			ret = aicwf_sdio_writeb(g_rwnx_plat->sdiodev, SDIOWIFI_WAKEUP_REG, 2);
+			aicwf_sdio_pwr_stctl(sdiodev, SDIO_SLEEP_ST);
+			/* For 8800D80 wakeup_reg is remapped; use chip-specific addr */
+			ret = aicwf_sdio_writeb(sdiodev, sdiodev->sdio_reg.wakeup_reg, 2);
 			if (ret < 0) {
-				sdio_err("reg:%d write failed!\n", SDIOWIFI_WAKEUP_REG);
+				sdio_err("reg:%d write failed!\n",
+					 sdiodev->sdio_reg.wakeup_reg);
 			}
+			/* Allow WiFi chip to sleep: deassert HOST_WAKE_WF */
+			rwnx_wifi_host_wake_set(0);
+			wifi_suspend_active = 1;
 		}
 	}
+}
+
+static int rwnx_wifi_suspend_status_show(struct seq_file *m, void *v)
+{
+	int wakeup_level = -1;
+	int host_wake_level = -1;
+
+	if (gpio_is_valid(wifi_wakeup_gpio))
+		wakeup_level = gpio_get_value(wifi_wakeup_gpio);
+	if (gpio_is_valid(wifi_host_wake_gpio))
+		host_wake_level = gpio_get_value(wifi_host_wake_gpio);
+
+	seq_printf(m, "suspend=%d\n", wifi_suspend_active);
+	seq_printf(m, "wakeup_gpio=%d level=%d\n", wifi_wakeup_gpio, wakeup_level);
+	seq_printf(m, "host_wake_gpio=%d level=%d assert=%d\n",
+		   wifi_host_wake_gpio, host_wake_level, wifi_host_wake_assert);
+	seq_printf(m, "hostwake_irq=%u count=%lu\n",
+		   hostwake_irq_num, wifi_hostwake_irq_cnt);
+	return 0;
+}
+
+static int rwnx_wifi_suspend_status_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rwnx_wifi_suspend_status_show, NULL);
 }
 
 static ssize_t rwnx_wifi_suspend_write_proc(struct file *file,
@@ -2564,10 +2709,30 @@ static ssize_t rwnx_wifi_suspend_write_proc(struct file *file,
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+static const struct proc_ops wifi_suspend_fops = {
+	.proc_write	= rwnx_wifi_suspend_write_proc,
+};
+static const struct proc_ops wifi_suspend_status_fops = {
+	.proc_open	= rwnx_wifi_suspend_status_open,
+	.proc_read	= seq_read,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= single_release,
+};
+#else
 static const struct file_operations wifi_suspend_fops = {
 	.owner		= THIS_MODULE,
 	.write		= rwnx_wifi_suspend_write_proc,
 };
+
+static const struct file_operations wifi_suspend_status_fops = {
+	.owner		= THIS_MODULE,
+	.open		= rwnx_wifi_suspend_status_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+#endif
 
 void rwnx_init_wifi_suspend_node(void){
 	struct proc_dir_entry *ent;
@@ -2575,17 +2740,27 @@ void rwnx_init_wifi_suspend_node(void){
 	wifi_suspend_node = proc_mkdir("wifi_suspend", NULL);
 	if (wifi_suspend_node == NULL) {
 		printk("Unable to create /proc/wifi_suspend directory");
+		return;
 	}
 
 	ent = proc_create("suspend", 0660, wifi_suspend_node, &wifi_suspend_fops);
 	if (ent == NULL) {
 		printk("Unable to create /proc/wifi_suspend/suspend");
 	}
+
+	ent = proc_create("status", 0440, wifi_suspend_node, &wifi_suspend_status_fops);
+	if (ent == NULL) {
+		printk("Unable to create /proc/wifi_suspend/status");
+	}
 }
 
 void rwnx_deinit_wifi_suspend_node(void){
+	if (!wifi_suspend_node)
+		return;
+	remove_proc_entry("status", wifi_suspend_node);
 	remove_proc_entry("suspend", wifi_suspend_node);
 	remove_proc_entry("wifi_suspend", 0);
+	wifi_suspend_node = NULL;
 }
 #endif//CONFIG_WIFI_SUSPEND_FOR_LINUX
 
