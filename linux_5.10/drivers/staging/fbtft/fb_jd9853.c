@@ -55,6 +55,27 @@ static void jd9853_apply_mirror_hw(struct fbtft_par *par)
 	write_reg(par, 0x21);
 }
 
+static bool jd9853_te_is_alive(struct fbtft_par *par)
+{
+	unsigned int i, high = 0;
+
+	if (!par->gpio.te)
+		return true;
+
+	/*
+	 * TE is mostly low; a healthy panel produces brief highs ~once per
+	 * frame. Sample for ~50ms. Linux SPI controller reset after U-Boot
+	 * often leaves the panel without a working TEON state even when
+	 * skip-init was requested.
+	 */
+	for (i = 0; i < 50; i++) {
+		if (gpiod_get_value_cansleep(par->gpio.te))
+			high++;
+		usleep_range(1000, 1200);
+	}
+	return high > 0;
+}
+
 static int init_display_preserve(struct fbtft_par *par)
 {
 	/* Orientation from U-Boot env via kernel cmdline */
@@ -63,11 +84,8 @@ static int init_display_preserve(struct fbtft_par *par)
 	return 0;
 }
 
-static int init_display(struct fbtft_par *par)
+static int init_display_full(struct fbtft_par *par)
 {
-	if (par->skip_init)
-		return init_display_preserve(par);
-
 	par->fbtftops.reset(par);
 
 	if (par->gpio.cs)
@@ -132,6 +150,25 @@ static int init_display(struct fbtft_par *par)
 			fb[i] = RGB565_BLUE;
 	}
 
+	return 0;
+}
+
+static int init_display(struct fbtft_par *par)
+{
+	if (par->skip_init) {
+		init_display_preserve(par);
+		if (jd9853_te_is_alive(par))
+			return 0;
+		dev_warn(par->info->device,
+			 "TE inactive after skip-init; falling back to full panel init\n");
+	}
+
+	init_display_full(par);
+	if (!jd9853_te_is_alive(par)) {
+		dev_warn(par->info->device,
+			 "TE inactive after panel init; retrying full init\n");
+		init_display_full(par);
+	}
 	return 0;
 }
 

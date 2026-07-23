@@ -84,6 +84,18 @@ static int zonhor_mirror_bootarg(const char *name, int defval)
 	return (*s == '1') ? 1 : 0;
 }
 
+static void zonhor_lcd_publish_hdr(struct zonhor_lcd *lcd)
+{
+	u8 tmp[64];
+
+	if (!lcd || !lcd->shm)
+		return;
+	/* Rewrite a full cache line then barrier so C906 sees updates. */
+	memcpy(tmp, lcd->shm, sizeof(tmp));
+	memcpy(lcd->shm, tmp, sizeof(tmp));
+	mb();
+}
+
 static void zonhor_lcd_mirror_apply_rtos(struct zonhor_lcd *lcd)
 {
 	cmdqu_t cmdq = { 0 };
@@ -110,7 +122,7 @@ static void zonhor_lcd_submit(struct zonhor_lcd *lcd)
 	lcd->shm->write_idx = idx;
 	lcd->shm->dirty = 1;
 	lcd->shm->frame_seq++;
-	wmb();
+	zonhor_lcd_publish_hdr(lcd);
 
 	cmdq.ip_id = IP_DISPLAY;
 	cmdq.cmd_id = DISPLAY_CMD_FLUSH;
@@ -151,14 +163,20 @@ static ssize_t zonhor_lcd_write(struct fb_info *info, const char __user *buf,
 extern int zonhor_lcd_bl_set_enable(int on) __attribute__((weak));
 
 /*
- * Prefer Linux soft-PWM backlight. Fall back to RTOS DISPLAY_CMD_BL only if
- * that module is not loaded.
+ * Prefer zonhor_lcd_bl sysfs proxy (mailbox → RTOS soft-PWM). Fall back to
+ * DISPLAY_CMD_BL directly if that module is not loaded (on=100%, off=0).
  */
 static void zonhor_lcd_set_bl(struct zonhor_lcd *lcd, int on)
 {
 	if (lcd && lcd->shm) {
-		lcd->shm->bl_on = on ? 1 : 0;
-		wmb();
+		if (on) {
+			lcd->shm->bl_on = 1;
+			/* Keep user/sysfs brightness; do not force 100 on fb unblank. */
+		} else {
+			lcd->shm->bl_on = 0;
+			lcd->shm->bl_level = 0;
+		}
+		zonhor_lcd_publish_hdr(lcd);
 	}
 
 	if (zonhor_lcd_bl_set_enable) {
@@ -172,7 +190,7 @@ static void zonhor_lcd_set_bl(struct zonhor_lcd *lcd, int on)
 		cmdq.ip_id = IP_DISPLAY;
 		cmdq.cmd_id = DISPLAY_CMD_BL;
 		cmdq.resv.valid.linux_valid = 1;
-		cmdq.param_ptr = on ? 1 : 0;
+		cmdq.param_ptr = on ? 100 : 0;
 		(void)rtos_cmdqu_send(&cmdq);
 	}
 }
@@ -204,11 +222,12 @@ static ssize_t status_show(struct device *dev, struct device_attribute *attr,
 		return sysfs_emit(buf, "no shm\n");
 
 	return sysfs_emit(buf,
-		"magic=0x%08x owner=%u linux_ready=%u rtos_ready=%u\n"
-		"mirror_x=%u mirror_y=%u\n"
+		"magic=0x%08x owner=%u linux_ready=%u rtos_ready=%u prog=%u\n"
+		"mirror_x=%u mirror_y=%u bl_level=%u\n"
 		"dirty=%u write_idx=%u frame_seq=%u te_sync_cnt=%u\n",
 		lcd->shm->magic, lcd->shm->owner, lcd->shm->linux_ready,
-		lcd->shm->rtos_ready, lcd->shm->mirror_x, lcd->shm->mirror_y,
+		lcd->shm->rtos_ready, lcd->shm->reserved_mirror,
+		lcd->shm->mirror_x, lcd->shm->mirror_y, lcd->shm->bl_level,
 		lcd->shm->dirty, lcd->shm->write_idx,
 		lcd->shm->frame_seq, lcd->shm->te_sync_cnt);
 }
@@ -558,7 +577,14 @@ static int zonhor_lcd_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	lcd->shm = memremap(lcd->phys, lcd->map_size, MEMREMAP_WC);
+	/*
+	 * Write-through mapping so handshake flags (linux_ready, dirty) are
+	 * pushed toward DRAM for C906L inv_dcache reads. Plain WB would need
+	 * explicit clean; WC can leave small stores buffered.
+	 */
+	lcd->shm = memremap(lcd->phys, lcd->map_size, MEMREMAP_WT);
+	if (!lcd->shm)
+		lcd->shm = memremap(lcd->phys, lcd->map_size, MEMREMAP_WC);
 	if (!lcd->shm)
 		return -ENOMEM;
 
@@ -592,7 +618,7 @@ static int zonhor_lcd_probe(struct platform_device *pdev)
 	 * have returned -ENODEV). RTOS must not open SPI before this.
 	 */
 	lcd->shm->linux_ready = 1;
-	wmb();
+	zonhor_lcd_publish_hdr(lcd);
 	dev_info(dev, "linux_ready=1, mirror=%u,%u, waiting for RTOS SPI\n",
 		 lcd->shm->mirror_x, lcd->shm->mirror_y);
 

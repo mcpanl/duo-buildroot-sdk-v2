@@ -2,10 +2,15 @@ PWD := $(shell pwd)
 
 ifneq ($(KERNELRELEASE),)
 
+ccflags-y += -I$(src)
+ccflags-y += -I$(src)/../../include
+ccflags-y += -I$(src)/../../interdrv/rtos_cmdqu/
 ccflags-y += -Wall -Wextra -Wno-unused-parameter
 
 cv181x_zonhor_lcd_bl-objs = zonhor_lcd_bl.o
 obj-m += cv181x_zonhor_lcd_bl.o
+
+KBUILD_EXTRA_SYMBOLS += $(src)/../../interdrv/rtos_cmdqu/Module.symvers
 
 else
 
