@@ -73,15 +73,27 @@ static void jd9853_bl_pwm_task(void *pvParameters)
 	}
 }
 
-void jd9853_bl_pwm_init(void)
+void jd9853_bl_pwm_init(unsigned initial_level)
 {
+	if (initial_level > BL_MAX)
+		initial_level = BL_MAX;
+
 	PINMUX_CONFIG(JTAG_CPU_TRST, XGPIOA_20);
-	gpio_direction_output(PIN_BL, 0);
-	g_bl_level = 0;
+	/*
+	 * Inherit U-Boot backlight state. Driving the pin low here used to
+	 * create a multi-second black gap until Linux lcd-bl probed.
+	 */
+	gpio_direction_output(PIN_BL, initial_level ? 1 : 0);
+	g_bl_level = initial_level;
 	g_bl_ready = 1;
 
+	/*
+	 * Must outrank DISPLAY (IDLE+4). DISPLAY busy-paces with arch_usleep
+	 * and only taskYIELD(); a lower-priority BL_PWM never runs, mailbox
+	 * slots fill up, and GPIOA20 sticks at the init level.
+	 */
 	xTaskCreate(jd9853_bl_pwm_task, "BL_PWM", configMINIMAL_STACK_SIZE,
-		    NULL, tskIDLE_PRIORITY + 2, NULL);
+		    NULL, tskIDLE_PRIORITY + 6, NULL);
 }
 
 void jd9853_set_backlight_level(unsigned level)

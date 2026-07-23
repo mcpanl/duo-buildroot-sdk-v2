@@ -211,6 +211,8 @@
 		dc = <&portb 20 0>;
 		reset = <&portb 12 GPIO_ACTIVE_LOW>;
 		te = <&portb 11 0>;
+		/* U-Boot jd9853_logo drives BL on GPIOA20 before RTOS soft-PWM */
+		led = <&porta 20 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
 };

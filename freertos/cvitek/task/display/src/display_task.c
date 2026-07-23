@@ -312,6 +312,20 @@ static int display_open_spi(void)
 	g_shm->reserved_mirror = DISP_PROG_SPI_OK;
 	display_hdr_flush();
 
+	/*
+	 * Full panel re-init clears GRAM. If U-Boot left a logo frame in SHM
+	 * (dirty=1), push it immediately so the splash survives the handoff.
+	 */
+	display_hdr_inv();
+	if (g_shm->dirty)
+		display_flush_frame();
+
+	/* Panel init must not leave BL stuck at 100 — restore SHM duty. */
+	display_hdr_inv();
+	display_apply_bl(g_shm->bl_on ? (g_shm->bl_level ? g_shm->bl_level
+							 : 100)
+				      : 0);
+
 	printf("display: spi ready\n");
 	return 0;
 }
@@ -331,8 +345,22 @@ void prvDisplayRunTask(void *pvParameters)
 			vTaskDelay(pdMS_TO_TICKS(1000));
 	}
 
-	/* Own GPIOA20 soft-PWM for both lcd_owner=rtos and linux. */
-	jd9853_bl_pwm_init();
+	/*
+	 * Own GPIOA20 soft-PWM for both lcd_owner=rtos and linux.
+	 * Inherit U-Boot bl_level so the splash backlight stays on through
+	 * the Linux probe gap (previously forced to 0 here).
+	 */
+	{
+		unsigned bl = 100;
+
+		display_hdr_inv();
+		if (g_shm->bl_on && g_shm->bl_level)
+			bl = g_shm->bl_level;
+		else if (!g_shm->bl_on)
+			bl = 0;
+		jd9853_bl_pwm_init(bl);
+		printf("display: bl_pwm init level=%u\n", bl);
+	}
 
 	display_resolve_owner();
 	if (g_owner_rtos) {
@@ -387,12 +415,30 @@ void prvDisplayRunTask(void *pvParameters)
 			display_hdr_inv();
 			if (g_shm->dirty)
 				display_flush_frame();
-			if (g_shm->bl_level != jd9853_get_backlight_level())
-				display_apply_bl(g_shm->bl_level);
+			/*
+			 * Always drive BL from SHM. Mailbox often fails when
+			 * slots are exhausted; relying on "level changed" alone
+			 * also misses the case where g_bl_level already matches
+			 * but the pin was left stuck (e.g. after pinmux fights).
+			 */
+			display_apply_bl(g_shm->bl_level);
+		} else if (g_shm) {
+			display_hdr_inv();
+			display_apply_bl(g_shm->bl_level);
 		}
 
-		/* Busy pacing so we keep running even if SysTick is unhealthy. */
-		arch_usleep(2000);
-		taskYIELD();
+		/*
+		 * Prefer a real tick delay so BL_PWM / CMDQU can run. Fall back
+		 * to a short busy pace + yield if the tick looks unhealthy.
+		 */
+		{
+			TickType_t t0 = xTaskGetTickCount();
+
+			vTaskDelay(pdMS_TO_TICKS(2));
+			if (xTaskGetTickCount() == t0) {
+				arch_usleep(2000);
+				taskYIELD();
+			}
+		}
 	}
 }

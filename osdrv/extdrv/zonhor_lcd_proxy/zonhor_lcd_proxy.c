@@ -628,6 +628,21 @@ static int zonhor_lcd_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	/*
+	 * Inherit U-Boot splash as /dev/fb0 initial contents so userspace
+	 * sees the logo until the first real write. Do not submit a flush:
+	 * RTOS already re-pushed SHM dirty after its panel full-init.
+	 */
+	{
+		u32 idx = lcd->shm->write_idx;
+
+		if (idx >= DISPLAY_BUF_COUNT)
+			idx = 0;
+		if (lcd->shm->magic == DISPLAY_SHM_MAGIC)
+			memcpy(lcd->vmem, lcd->shm->buf[idx],
+			       DISPLAY_FRAME_BYTES);
+	}
+
 	info = framebuffer_alloc(0, dev);
 	if (!info) {
 		vfree(lcd->vmem);

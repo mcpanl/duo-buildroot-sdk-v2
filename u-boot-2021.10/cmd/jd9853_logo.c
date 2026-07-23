@@ -633,6 +633,29 @@ static void jd9853_init_display_shm(void)
 	       shm->mirror_x, shm->mirror_y);
 }
 
+/*
+ * Seed SHM buf[0] with the same host-endian RGB565 logo that was blitted to
+ * the panel. RTOS full-init clears GRAM; dirty=1 lets it re-push this frame.
+ */
+static void jd9853_publish_logo_frame(void)
+{
+	struct display_shm *shm = (struct display_shm *)(uintptr_t)CVIMMAP_DISPLAY_SHM_ADDR;
+	size_t total = jd9853_logo_end - jd9853_logo_data;
+
+	if (total != DISPLAY_FRAME_BYTES) {
+		printf("jd9853: skip shm logo seed, size %zu != %u\n",
+		       total, (unsigned)DISPLAY_FRAME_BYTES);
+		return;
+	}
+
+	memcpy(shm->buf[0], jd9853_logo_data, DISPLAY_FRAME_BYTES);
+	shm->write_idx = 0;
+	shm->dirty = 1;
+	shm->frame_seq = 0;
+	flush_dcache_range((unsigned long)shm, sizeof(*shm));
+	printf("jd9853: logo seeded to display_shm buf[0] dirty=1\n");
+}
+
 static int do_jd9853_logo(struct cmd_tbl *cmdtp, int flag, int argc,
 			  char *const argv[])
 {
@@ -658,6 +681,8 @@ static int do_jd9853_logo(struct cmd_tbl *cmdtp, int flag, int argc,
 	printf("jd9853_logo: backlight on, logical=%d\n",
 	       dm_gpio_get_value(&jd9853.gpio_bl));
 	jd9853_init_display_shm();
+	if (!ret)
+		jd9853_publish_logo_frame();
 	printf("jd9853_logo: done (%dx%d)\n", JD9853_WIDTH, JD9853_HEIGHT);
 
 	return ret ? CMD_RET_FAILURE : CMD_RET_SUCCESS;

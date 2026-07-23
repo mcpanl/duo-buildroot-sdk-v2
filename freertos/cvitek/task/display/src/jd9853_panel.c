@@ -272,7 +272,7 @@ int jd9853_panel_init(int skip_init)
 		if (ret)
 			return ret;
 		if (jd9853_te_is_alive()) {
-			jd9853_set_backlight(1);
+			/* Keep current soft-PWM duty; display_task owns BL. */
 			printf("jd9853: ready %dx%d (skip-init)\n",
 			       JD9853_WIDTH, JD9853_HEIGHT);
 			return 0;
@@ -287,7 +287,7 @@ int jd9853_panel_init(int skip_init)
 		return ret;
 	}
 
-	jd9853_set_backlight(1);
+	/* Do not force BL on here — inherits U-Boot/Linux duty via SHM. */
 	printf("jd9853: ready %dx%d\n", JD9853_WIDTH, JD9853_HEIGHT);
 	return 0;
 }
