@@ -30,11 +30,21 @@
 
 #define SYNC_S		".long 0x0190000b"
 
-#define CACHE_OP_RANGE(OP, start, size) \
-	register unsigned long i asm("a0") = start & ~(L1_CACHE_BYTES - 1); \
-	for (; i < ALIGN(start + size, L1_CACHE_BYTES); i += L1_CACHE_BYTES) \
-		__asm__ __volatile__(OP); \
-	 __asm__ __volatile__(SYNC_S)
+/*
+ * Bind address into a0 for each T-Head dcache.*pa opcode. The previous
+ * "register asm("a0")" loop form was unsafe with optimization: a0 was not
+ * reliably updated each iteration, so large range ops could hit the wrong
+ * line repeatedly or confuse the pipeline on shared DRAM with CA53.
+ */
+#define CACHE_OP_RANGE(OP, start, size) do { \
+	unsigned long _a = (unsigned long)(start) & ~(L1_CACHE_BYTES - 1UL); \
+	unsigned long _e = ALIGN((unsigned long)(start) + (size), L1_CACHE_BYTES); \
+	for (; _a < _e; _a += L1_CACHE_BYTES) { \
+		register unsigned long _ra0 asm("a0") = _a; \
+		__asm__ __volatile__(OP :: "r"(_ra0) : "memory"); \
+	} \
+	__asm__ __volatile__(SYNC_S ::: "memory"); \
+} while (0)
 
 //void c900_cache_invalidate(phys_addr_t start, size_t size)
 void inv_dcache_range(uintptr_t start, size_t size)

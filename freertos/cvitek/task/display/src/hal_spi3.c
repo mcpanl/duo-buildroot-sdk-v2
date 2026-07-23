@@ -8,6 +8,8 @@
 #include "hal_pinmux.h"
 #include "cv181x_pinmux.h"
 #include "hal_spi3.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #define SPI3_BASE		0x041B0000u
 
@@ -60,7 +62,7 @@ static void spi3_enable_clock(void)
 
 static void spi3_wait_idle(void)
 {
-	unsigned int guard = 1000000;
+	unsigned int guard = 10000;
 
 	while ((spi3_read(DW_SPI_SR) & SR_BUSY) && guard--)
 		;
@@ -102,18 +104,28 @@ int hal_spi3_xfer(const void *tx, size_t len)
 {
 	const uint8_t *p = tx;
 	size_t i = 0;
+	unsigned int guard;
 
 	if (!tx || !len)
 		return 0;
 
 	spi3_wait_idle();
 	while (i < len) {
-		while (!(spi3_read(DW_SPI_SR) & SR_TF_NOT_FULL))
-			;
+		/* Fail fast so Display cannot wedge on a stuck FIFO. */
+		guard = 100000;
+		while (!(spi3_read(DW_SPI_SR) & SR_TF_NOT_FULL)) {
+			if (!guard--)
+				return -1;
+		}
 		spi3_write(DW_SPI_DR, p[i++]);
+		if ((i & 0x1ff) == 0)
+			taskYIELD();
 	}
 	spi3_wait_idle();
-	while (!(spi3_read(DW_SPI_SR) & SR_TF_EMPT))
-		;
+	guard = 100000;
+	while (!(spi3_read(DW_SPI_SR) & SR_TF_EMPT)) {
+		if (!guard--)
+			return -1;
+	}
 	return 0;
 }

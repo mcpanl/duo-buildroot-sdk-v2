@@ -30,7 +30,6 @@ static uint8_t g_mirror_y = LCD_MIRROR_Y_DEFAULT;
 #define PIN_DC			GPIOB(20)
 #define PIN_RST			GPIOB(12)
 #define PIN_TE			GPIOB(11)
-#define PIN_BL			GPIOA(20)
 
 #define SPI_HZ			40000000
 #define WRBUF_BYTES		4096
@@ -70,11 +69,10 @@ static void jd9853_gpio_setup(void)
 	PINMUX_CONFIG(VIVO_D1, XGPIOB_20);	/* DC */
 	PINMUX_CONFIG(VIVO_D9, XGPIOB_12);	/* RST */
 	PINMUX_CONFIG(VIVO_D10, XGPIOB_11);	/* TE */
-	PINMUX_CONFIG(JTAG_CPU_TRST, XGPIOA_20); /* BL */
+	/* BL pinmux/PWM owned by jd9853_bl_pwm_init() */
 
 	gpio_direction_output(PIN_DC, 1);
 	gpio_direction_output(PIN_RST, 1); /* physical high (deasserted) */
-	gpio_direction_output(PIN_BL, 0);
 	gpio_direction_input(PIN_TE);
 }
 
@@ -247,6 +245,18 @@ static int jd9853_skip_init(void)
 	return jd9853_apply_orientation();
 }
 
+static int jd9853_te_is_alive(void)
+{
+	int i, high = 0;
+
+	for (i = 0; i < 50; i++) {
+		if (gpio_get_value(PIN_TE))
+			high++;
+		mdelay(1);
+	}
+	return high > 0;
+}
+
 int jd9853_panel_init(int skip_init)
 {
 	int ret;
@@ -259,10 +269,19 @@ int jd9853_panel_init(int skip_init)
 	if (skip_init) {
 		printf("jd9853: skip-init (preserve U-Boot state)\n");
 		ret = jd9853_skip_init();
-	} else {
-		printf("jd9853: full panel init\n");
-		ret = jd9853_full_init();
+		if (ret)
+			return ret;
+		if (jd9853_te_is_alive()) {
+			jd9853_set_backlight(1);
+			printf("jd9853: ready %dx%d (skip-init)\n",
+			       JD9853_WIDTH, JD9853_HEIGHT);
+			return 0;
+		}
+		printf("jd9853: TE inactive after skip-init; full init\n");
 	}
+
+	printf("jd9853: full panel init\n");
+	ret = jd9853_full_init();
 	if (ret) {
 		printf("jd9853: init failed (%d)\n", ret);
 		return ret;
@@ -358,19 +377,12 @@ int jd9853_fill_color(uint16_t rgb565)
 	return 0;
 }
 
-void jd9853_set_backlight(int on)
-{
-	gpio_set_value(PIN_BL, on ? 1 : 0);
-}
-
 void jd9853_wait_te(void)
 {
-	/* Align with Linux fbtft_wait_te(): exit VBANK then wait rising TE */
-	unsigned int guard = 50000;
-
-	while (gpio_get_value(PIN_TE) && guard--)
-		udelay(100);
-	guard = 50000;
-	while (!gpio_get_value(PIN_TE) && guard--)
-		udelay(100);
+	/*
+	 * Non-blocking TE peek only. The previous udelay busy-wait could wedge
+	 * Display forever if GetSysTime() stops advancing (arch_usleep spins
+	 * until end_time). Pixel refresh must not depend on TE for liveness.
+	 */
+	(void)gpio_get_value(PIN_TE);
 }
