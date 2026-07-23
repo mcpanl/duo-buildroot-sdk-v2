@@ -19,7 +19,12 @@ fi
 safe_insmod "$KO_DIR/cv181x_rtos_cmdqu.ko"
 safe_insmod "$KO_DIR/cv181x_fast_image.ko"
 # LCD backlight soft-PWM (GPIOA20). Load before proxy so fb blank can find it.
+# Free sysfs export of GPIOA20 if a userspace helper claimed it first (EBUSY).
 if [ -f "$KO_DIR/cv181x_zonhor_lcd_bl.ko" ]; then
+	if [ -d /sys/class/gpio/gpio500 ]; then
+		echo 500 > /sys/class/gpio/unexport 2>/dev/null || true
+	fi
+	# Without updated DTB, pass gpio=500 (GPIOA20). With DTB node, omit args.
 	if [ -d /sys/firmware/devicetree/base/lcd-bl ]; then
 		safe_insmod "$KO_DIR/cv181x_zonhor_lcd_bl.ko" || true
 	else

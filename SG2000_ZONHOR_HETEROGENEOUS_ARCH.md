@@ -316,7 +316,7 @@ Linux 仅：业务逻辑、网络、存储、TPU 推理、UI 合成写共享缓�
 | DC | GPIOB20 |
 | RST | GPIOB12 |
 | TE | GPIOB11 |
-| BL | GPIOA20 |
+| BL | GPIOA20（FreeRTOS soft-PWM；Linux 仅 mailbox 下发 0..100） |
 | Touch IRQ | GPIOA28 |
 | Touch RST | GPIOB21 |
 

@@ -623,6 +623,7 @@ static void jd9853_init_display_shm(void)
 	shm->version = DISPLAY_SHM_VERSION;
 	shm->owner = owner_id;
 	shm->bl_on = 1;
+	shm->bl_level = 100;
 	shm->mirror_x = jd9853_env_mirror("lcd_mirror_x", LCD_MIRROR_X_DEFAULT);
 	shm->mirror_y = jd9853_env_mirror("lcd_mirror_y", LCD_MIRROR_Y_DEFAULT);
 	flush_dcache_range((unsigned long)shm, sizeof(*shm));
@@ -639,14 +640,19 @@ static int do_jd9853_logo(struct cmd_tbl *cmdtp, int flag, int argc,
 
 	printf("jd9853_logo: start\n");
 	ret = jd9853_open(&jd9853, true);
-	if (ret)
-		return CMD_RET_FAILURE;
-
-	ret = jd9853_blit_logo(&jd9853);
 	if (ret) {
-		printf("jd9853_logo: blit failed (%d)\n", ret);
+		/*
+		 * Still publish display_shm so RTOS/Linux ownership handshake
+		 * works even if panel SPI init failed this boot.
+		 */
+		jd9853_init_display_shm();
+		printf("jd9853_logo: open failed (%d), shm published\n", ret);
 		return CMD_RET_FAILURE;
 	}
+
+	ret = jd9853_blit_logo(&jd9853);
+	if (ret)
+		printf("jd9853_logo: blit failed (%d)\n", ret);
 
 	dm_gpio_set_value(&jd9853.gpio_bl, 1);
 	printf("jd9853_logo: backlight on, logical=%d\n",
@@ -654,7 +660,7 @@ static int do_jd9853_logo(struct cmd_tbl *cmdtp, int flag, int argc,
 	jd9853_init_display_shm();
 	printf("jd9853_logo: done (%dx%d)\n", JD9853_WIDTH, JD9853_HEIGHT);
 
-	return CMD_RET_SUCCESS;
+	return ret ? CMD_RET_FAILURE : CMD_RET_SUCCESS;
 }
 
 static int do_jd9853(struct cmd_tbl *cmdtp, int flag, int argc,

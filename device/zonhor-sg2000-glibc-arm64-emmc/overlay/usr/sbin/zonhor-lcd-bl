@@ -1,5 +1,6 @@
 #!/bin/sh
-# Zonhor JD9853 LCD backlight (0-100%, soft-PWM via kernel).
+# Zonhor JD9853 LCD backlight (0-100%).
+# Linux sysfs → mailbox → FreeRTOS soft-PWM on GPIOA20.
 #
 # Works for cvi.lcd_owner=rtos and linux once cv181x_zonhor_lcd_bl.ko is loaded.
 #
@@ -17,7 +18,7 @@ BL_NAME=zonhor-lcd-bl
 GPIO_A20=500
 
 find_bl_sysfs() {
-	# Prefer dedicated soft-PWM device
+	# Prefer dedicated backlight class (mailbox → RTOS soft-PWM)
 	if [ -d "/sys/class/backlight/${BL_NAME}" ]; then
 		echo "/sys/class/backlight/${BL_NAME}"
 		return 0
@@ -77,7 +78,7 @@ set_brightness() {
 		else
 			echo 0 > "$g/value"
 		fi
-		echo "zonhor-lcd-bl: warn: no backlight class, GPIO on/off only" >&2
+		echo "zonhor-lcd-bl: warn: no backlight class, GPIO on/off only (may fight RTOS PWM)" >&2
 		return 0
 	fi
 	echo "zonhor-lcd-bl: no backlight sysfs (insmod cv181x_zonhor_lcd_bl.ko?)" >&2

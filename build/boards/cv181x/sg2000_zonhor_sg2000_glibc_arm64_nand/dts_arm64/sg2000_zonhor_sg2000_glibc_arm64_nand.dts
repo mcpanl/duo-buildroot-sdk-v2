@@ -68,12 +68,11 @@
 	};
 
 	/*
-	 * JD9853 backlight on PAD_JTAG_CPU_TRST / GPIOA20 (active-high).
-	 * Soft-PWM under Linux for both cvi.lcd_owner=rtos and linux.
+	 * JD9853 backlight: Linux sysfs proxy only. Soft-PWM on GPIOA20
+	 * (PAD_JTAG_CPU_TRST) runs on FreeRTOS via DISPLAY_CMD_BL mailbox.
 	 */
 	zonhor_lcd_bl: lcd-bl {
 		compatible = "zonhor,lcd-bl";
-		gpios = <&porta 20 GPIO_ACTIVE_HIGH>;
 		default-brightness = <60>;
 		status = "okay";
 	};
@@ -203,9 +202,12 @@
 		height = <320>;
 		rotate = <0>;
 		fps = <30>;
-		/* BL GPIO owned by zonhor,lcd-bl (soft-PWM), not fbtft */
+		/* BL GPIO owned by FreeRTOS soft-PWM, not fbtft */
 		backlight = <0>;
-		fbtft,skip-init;
+		/*
+		 * Do not use fbtft,skip-init: Linux SPI controller reset after
+		 * U-Boot often leaves TE dead. Driver also has TE fallback.
+		 */
 		dc = <&portb 20 0>;
 		reset = <&portb 12 GPIO_ACTIVE_LOW>;
 		te = <&portb 11 0>;
@@ -252,6 +254,8 @@
 
 &wifisd {
 	status = "okay";
+	/* AIC8800 suspend requires MMC_PM_KEEP_POWER from SDIO host */
+	keep-power-in-suspend;
 	cap-sd-highspeed;
 	sd-uhs-sdr25;
 	sd-uhs-ddr50;
