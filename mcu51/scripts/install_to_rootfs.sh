@@ -42,6 +42,11 @@ if [ -f "${MCU51_DIR}/scripts/mcu51-update" ]; then
 		"${TARGET_DIR}/usr/sbin/mcu51-update"
 fi
 
+if [ -f "${MCU51_DIR}/scripts/mcu51-hb" ]; then
+	install -D -m 0755 "${MCU51_DIR}/scripts/mcu51-hb" \
+		"${TARGET_DIR}/usr/sbin/mcu51-hb"
+fi
+
 if [ -f "${MCU51_DIR}/scripts/S30mcu51" ]; then
 	install -D -m 0755 "${MCU51_DIR}/scripts/S30mcu51" \
 		"${TARGET_DIR}/etc/init.d/S30mcu51"

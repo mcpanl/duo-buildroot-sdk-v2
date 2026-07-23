@@ -1,0 +1,62 @@
+#!/bin/sh
+#
+# Linux -> MCU51 heartbeat: bump RTC_INFO1[31:16] every 500ms so the 8051
+# leaves USER_LED (GPIOA18) alone while Linux is alive.
+#
+# Usage: mcu51-hb start|stop|status
+#
+
+LEDCTL=/usr/sbin/mcu51-ledctl
+PIDFILE=/var/run/mcu51-hb.pid
+INTERVAL_SEC=0.5
+
+start() {
+	if [ ! -x "$LEDCTL" ]; then
+		echo "mcu51-hb: $LEDCTL missing" >&2
+		return 1
+	fi
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+		echo "mcu51-hb: already running pid=$(cat "$PIDFILE")"
+		return 0
+	fi
+	(
+		while true; do
+			"$LEDCTL" hb-once >/dev/null 2>&1 || true
+			sleep "$INTERVAL_SEC"
+		done
+	) &
+	echo $! > "$PIDFILE"
+	echo "mcu51-hb: started pid=$!"
+}
+
+stop() {
+	if [ -f "$PIDFILE" ]; then
+		pid=$(cat "$PIDFILE")
+		kill "$pid" 2>/dev/null || true
+		rm -f "$PIDFILE"
+		echo "mcu51-hb: stopped pid=$pid"
+	else
+		# Best-effort: kill stray loops
+		killall mcu51-hb 2>/dev/null || true
+		echo "mcu51-hb: not running"
+	fi
+}
+
+status() {
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+		echo "mcu51-hb: running pid=$(cat "$PIDFILE")"
+		return 0
+	fi
+	echo "mcu51-hb: stopped"
+	return 1
+}
+
+case "$1" in
+start) start ;;
+stop) stop ;;
+status) status ;;
+*)
+	echo "Usage: $0 {start|stop|status}"
+	exit 1
+	;;
+esac

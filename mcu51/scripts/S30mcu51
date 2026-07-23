@@ -3,12 +3,18 @@
 # Start 8051 MCU with factory or runtime-updated firmware.
 # Runs after S04data so /mnt/data may already be mounted.
 #
+# While Linux is up, mcu51-hb bumps RTC_INFO heartbeat so MCU does not RMW
+# GPIOA (shared with FreeRTOS backlight soft-PWM / other LEDs).
+#
 
 NAME=mcu51
 UP=/usr/sbin/mcu51-up
 LEDCTL=/usr/sbin/mcu51-ledctl
+HB=/usr/sbin/mcu51-hb
 RUNTIME_DIR=/mnt/data/mcu51
 FACTORY_FW=/lib/firmware/mcu51/mars_mcu_fw.bin
+REG_RTCSYS_RST=0x05025018
+RST_HOLD=0x8107fffd
 
 start() {
 	if [ ! -x "$UP" ]; then
@@ -26,18 +32,16 @@ start() {
 
 	mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
 
-	# Hand USER_LED (GPIOA[18]) from gpio-leds to MCU before load.
-	if [ -x "$LEDCTL" ]; then
-		"$LEDCTL" release-led >/dev/null 2>&1 || true
-	elif [ -e /sys/class/leds/user-led/trigger ]; then
-		echo none >/sys/class/leds/user-led/trigger 2>/dev/null || true
-	fi
-
 	echo -n "Starting $NAME: "
+	# Default: skip SRAM rewrite if MCU already running (VBAT keep-alive).
+	# Use: mcu51-up -F  to force reload after a firmware update.
 	if "$UP" -q; then
-		# Default blink mode: 300ms on / 700ms off
+		# Default blink mode: 300ms on / 700ms off (preserves HB bits)
 		if [ -x "$LEDCTL" ]; then
 			"$LEDCTL" mode 0 >/dev/null 2>&1 || true
+		fi
+		if [ -x "$HB" ]; then
+			"$HB" start >/dev/null 2>&1 || true
 		fi
 		echo "OK"
 	else
@@ -47,7 +51,15 @@ start() {
 }
 
 stop() {
-	echo "Stopping $NAME: leave running"
+	echo -n "Stopping $NAME: "
+	if [ -x "$HB" ]; then
+		"$HB" stop >/dev/null 2>&1 || true
+	fi
+	# Hold 8051 in reset only (do NOT write 0 — that kills RTC fabric).
+	if [ -e /dev/mem ] && command -v busybox >/dev/null 2>&1; then
+		busybox devmem "$REG_RTCSYS_RST" 32 "$RST_HOLD" >/dev/null 2>&1 || true
+	fi
+	echo "OK"
 }
 
 case "$1" in
@@ -58,6 +70,7 @@ stop)
 	stop
 	;;
 restart|reload)
+	stop
 	start
 	;;
 *)

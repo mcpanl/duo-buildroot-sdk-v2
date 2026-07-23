@@ -57,7 +57,8 @@ if [ ! -x "${UP}" ]; then
 	exit 0
 fi
 
-if "${UP}"; then
+# -F: always rewrite SRAM (skip-if-alive would leave old FW running)
+if "${UP}" -F; then
 	echo "mcu51-update: MCU reloaded OK"
 	exit 0
 fi
@@ -65,9 +66,9 @@ fi
 echo "mcu51-update: reload failed, trying rollback..." >&2
 if [ -f "${BAK_FW}" ]; then
 	cp -f "${BAK_FW}" "${ACTIVE_FW}"
-	"${UP}" || true
+	"${UP}" -F || true
 elif [ -f "${FACTORY_FW}" ]; then
 	rm -f "${ACTIVE_FW}"
-	"${UP}" -f "${FACTORY_FW}" || true
+	"${UP}" -F -f "${FACTORY_FW}" || true
 fi
 exit 2

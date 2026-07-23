@@ -4,6 +4,7 @@
  * Based on milkv-duo/duo-8051 tools/8051_up, extended for:
  *  - CLI firmware path / boot address
  *  - Factory + runtime update paths
+ *  - Skip reload when MCU already running (magic + RTC_INFO2 advancing)
  *  - Optional post-load RTC_INFO0 handshake check
  */
 
@@ -18,6 +19,7 @@
 
 #define RTC_SRAM_BASE		0x05200000UL
 #define RTC_INFO0		0x0502601CUL
+#define RTC_INFO2		0x05026024UL
 #define REG_RTCSYS_RST		0x05025018UL
 #define REG_MCU51_CTRL0		0x05025020UL
 #define REG_RTC2AP_ENABLE	0x03000248UL
@@ -30,20 +32,30 @@
 #define MCU51_MAGIC		0x8051U
 #define MCU51_MAX_SRAM_SIZE	(8 * 1024)
 
+/* Wait long enough for one blink phase (mode0 off=700ms) plus margin. */
+#define PROBE_TIMEOUT_MS	1200
+#define PROBE_POLL_MS		50
+
 static uint32_t boot_addr = RTC_SRAM_BASE;
 static int check_alive = 1;
+static int force_reload;
 static int quiet;
 
 static void usage(const char *prog)
 {
 	fprintf(stderr,
-		"Usage: %s [-f firmware.bin] [-a boot_addr] [-c cfg.ini] [-n] [-q]\n"
+		"Usage: %s [-f firmware.bin] [-a boot_addr] [-c cfg.ini] [-F] [-n] [-q]\n"
 		"  -f  firmware path (default: runtime then factory)\n"
 		"  -a  boot address (default 0x05200000 RTC SRAM)\n"
 		"  -c  boot cfg file containing hex address\n"
-		"  -n  do not wait/check RTC_INFO0==0x8051\n"
-		"  -q  quiet\n",
-		prog);
+		"  -F  force reload even if MCU already running\n"
+		"  -n  do not wait/check RTC_INFO0==0x8051 after load\n"
+		"  -q  quiet\n"
+		"\n"
+		"By default, if RTC_INFO0 magic is present and RTC_INFO2 (run_ms)\n"
+		"advances within ~%dms, firmware load is skipped so a VBAT-kept\n"
+		"MCU continues without reset.\n",
+		prog, PROBE_TIMEOUT_MS);
 }
 
 static int load_boot_addr(const char *filename)
@@ -140,6 +152,35 @@ static int mcu51_wait_alive(int timeout_ms)
 	return -1;
 }
 
+/*
+ * True only if magic is present AND RTC_INFO2 advances (MCU executing).
+ * Stale magic left in always-on regs after a dead MCU must not skip reload.
+ */
+static int mcu51_is_running(void)
+{
+	uint32_t info0;
+	uint32_t t0;
+	uint32_t t1;
+	int waited = 0;
+
+	info0 = devmem_readl(RTC_INFO0);
+	if ((info0 & 0xFFFFU) != MCU51_MAGIC)
+		return 0;
+
+	t0 = devmem_readl(RTC_INFO2);
+	while (waited < PROBE_TIMEOUT_MS) {
+		usleep(PROBE_POLL_MS * 1000);
+		waited += PROBE_POLL_MS;
+		info0 = devmem_readl(RTC_INFO0);
+		if ((info0 & 0xFFFFU) != MCU51_MAGIC)
+			return 0;
+		t1 = devmem_readl(RTC_INFO2);
+		if (t1 != t0)
+			return 1;
+	}
+	return 0;
+}
+
 static const char *pick_default_fw(void)
 {
 	if (access(MCU_FW_RUNTIME, R_OK) == 0)
@@ -159,7 +200,7 @@ int main(int argc, char *argv[])
 	int opt;
 	int ret;
 
-	while ((opt = getopt(argc, argv, "f:a:c:nqh")) != -1) {
+	while ((opt = getopt(argc, argv, "f:a:c:Fnqh")) != -1) {
 		switch (opt) {
 		case 'f':
 			fw_path = optarg;
@@ -169,6 +210,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'c':
 			cfg_path = optarg;
+			break;
+		case 'F':
+			force_reload = 1;
 			break;
 		case 'n':
 			check_alive = 0;
@@ -181,6 +225,14 @@ int main(int argc, char *argv[])
 			usage(argv[0]);
 			return (opt == 'h') ? 0 : 1;
 		}
+	}
+
+	if (!force_reload && mcu51_is_running()) {
+		/* Always print: useful after VBAT-only main-power loss. */
+		printf("mcu51: already running (RTC_INFO0=0x%08x run_ms=%u); skip load\n",
+		       devmem_readl(RTC_INFO0),
+		       devmem_readl(RTC_INFO2));
+		return 0;
 	}
 
 	if (cfg_path) {
@@ -212,9 +264,9 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	if (!quiet)
-		printf("mcu51: load %s (%zu bytes) @ 0x%08x\n",
-		       fw_path, size, boot_addr);
+	printf("mcu51: load %s (%zu bytes) @ 0x%08x%s\n",
+	       fw_path, size, boot_addr,
+	       force_reload ? " (forced)" : "");
 
 	mcu51_hold_reset();
 
@@ -237,8 +289,9 @@ int main(int argc, char *argv[])
 			return 2;
 		}
 		if (!quiet)
-			printf("mcu51: alive (RTC_INFO0=0x%08x)\n",
-			       devmem_readl(RTC_INFO0));
+			printf("mcu51: alive (RTC_INFO0=0x%08x run_ms=%u)\n",
+			       devmem_readl(RTC_INFO0),
+			       devmem_readl(RTC_INFO2));
 	}
 
 	if (!quiet)
