@@ -10,6 +10,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "timers.h"
 
 #include "printf.h"
 #include "arch_helpers.h"
@@ -17,14 +18,15 @@
 #include "rtos_stats_shm.h"
 #include "rtos_stats.h"
 
-#define STATS_TASK_STACK		(configMINIMAL_STACK_SIZE * 4)
-#define STATS_TASK_PRIO			(tskIDLE_PRIORITY + 1)
-#define STATS_MAX_SYSTEM_TASKS		24
+#define STATS_TIMER_NAME		"STATS"
+/* Must be >= uxTaskGetNumberOfTasks(); uxTaskGetSystemState returns 0 otherwise */
+#define STATS_MAX_SYSTEM_TASKS		48
 
 static struct rtos_stats_shm *g_stats;
 static struct display_shm *g_disp;
 
 static TaskStatus_t s_prev_status[STATS_MAX_SYSTEM_TASKS];
+static TaskStatus_t s_status[STATS_MAX_SYSTEM_TASKS];
 static UBaseType_t s_prev_count;
 static uint32_t s_prev_total_runtime;
 static uint8_t s_have_prev;
@@ -38,12 +40,21 @@ static uint32_t stats_now_ms(void)
 	return (uint32_t)(xTaskGetTickCount() * (1000u / configTICK_RATE_HZ));
 }
 
+/*
+ * Publish to DRAM for CA53. Prefer clean (CPA) over flush/cipa — same as
+ * display_task. cipa has been unreliable for this SHM path.
+ */
+static void stats_publish(uintptr_t addr, size_t size)
+{
+	clean_dcache_range(addr, size);
+}
+
 static void stats_shm_init(void)
 {
 	g_disp = (struct display_shm *)(uintptr_t)CVIMMAP_DISPLAY_SHM_ADDR;
 	g_stats = (struct rtos_stats_shm *)(uintptr_t)RTOS_STATS_SHM_ADDR;
 
-	memset(g_stats, 0, sizeof(*g_stats));
+	memset(g_stats, 0, offsetof(struct rtos_stats_shm, samples));
 	g_stats->magic = RTOS_STATS_SHM_MAGIC;
 	g_stats->version = RTOS_STATS_SHM_VERSION;
 	g_stats->sample_interval_ms = RTOS_STATS_SAMPLE_INTERVAL_MS;
@@ -51,10 +62,8 @@ static void stats_shm_init(void)
 	g_stats->write_idx = 0;
 	g_stats->seq = 0;
 	g_stats->total_samples = 0;
-	flush_dcache_range((uintptr_t)g_stats, sizeof(*g_stats));
-
-	printf("rtos_stats: shm @ %x size=%u\n",
-	       (unsigned)RTOS_STATS_SHM_ADDR, (unsigned)sizeof(*g_stats));
+	stats_publish((uintptr_t)g_stats,
+		      offsetof(struct rtos_stats_shm, samples));
 }
 
 static uint16_t stats_calc_display_fps(uint32_t now_ms, uint32_t te_cnt,
@@ -84,7 +93,6 @@ static uint16_t stats_calc_display_fps(uint32_t now_ms, uint32_t te_cnt,
 	if (delta_ms == 0)
 		return 0;
 
-	/* FPS * 100 = delta_te * 100000 / delta_ms */
 	fps_x100 = (uint16_t)((delta_te * 100000ULL) / delta_ms);
 	return fps_x100;
 }
@@ -147,10 +155,9 @@ static void stats_fill_tasks(struct rtos_stats_sample *sample,
 
 static void stats_take_sample(void)
 {
-	TaskStatus_t status[STATS_MAX_SYSTEM_TASKS];
 	UBaseType_t count;
 	uint32_t total_runtime = 0;
-	uint32_t total_delta;
+	uint32_t total_delta = 0;
 	uint32_t now_ms;
 	uint32_t te_cnt = 0;
 	uint32_t frame_seq = 0;
@@ -158,11 +165,6 @@ static void stats_take_sample(void)
 	struct rtos_stats_sample *slot;
 	uint32_t idx;
 	uint16_t cpu_pct = 0;
-
-	count = uxTaskGetSystemState(status, STATS_MAX_SYSTEM_TASKS,
-				     &total_runtime);
-	if (count == 0)
-		return;
 
 	now_ms = stats_now_ms();
 
@@ -174,23 +176,11 @@ static void stats_take_sample(void)
 				 g_disp->rtos_ready) ? 1 : 0;
 	}
 
-	if (!s_have_prev) {
-		memcpy(s_prev_status, status, count * sizeof(TaskStatus_t));
-		s_prev_count = count;
-		s_prev_total_runtime = total_runtime;
-		s_have_prev = 1;
-		/* Still record FPS baseline */
-		(void)stats_calc_display_fps(now_ms, te_cnt, display_ready);
-		return;
-	}
-
-	total_delta = total_runtime - s_prev_total_runtime;
 	idx = g_stats->write_idx % RTOS_STATS_RING_CAP;
 	slot = &g_stats->samples[idx];
 
-	/* seqlock: odd while writing */
 	g_stats->seq++;
-	flush_dcache_range((uintptr_t)&g_stats->seq, sizeof(g_stats->seq));
+	stats_publish((uintptr_t)&g_stats->seq, sizeof(g_stats->seq));
 
 	memset(slot, 0, sizeof(*slot));
 	slot->timestamp_ms = now_ms;
@@ -204,42 +194,55 @@ static void stats_take_sample(void)
 	slot->display_fps_x100 =
 		stats_calc_display_fps(now_ms, te_cnt, display_ready);
 
-	stats_fill_tasks(slot, status, count, total_delta, &cpu_pct);
-	slot->cpu_usage_pct = cpu_pct;
+	count = uxTaskGetSystemState(s_status, STATS_MAX_SYSTEM_TASKS,
+				     &total_runtime);
+	if (s_have_prev && count > 0)
+		total_delta = total_runtime - s_prev_total_runtime;
+	if (count > 0) {
+		stats_fill_tasks(slot, s_status, count, total_delta, &cpu_pct);
+		slot->cpu_usage_pct = cpu_pct;
+	}
 
-	flush_dcache_range((uintptr_t)slot, sizeof(*slot));
+	stats_publish((uintptr_t)slot, sizeof(*slot));
 
 	g_stats->write_idx = (idx + 1) % RTOS_STATS_RING_CAP;
 	g_stats->total_samples++;
-	g_stats->seq++; /* even = stable */
-	flush_dcache_range((uintptr_t)g_stats,
-			   offsetof(struct rtos_stats_shm, samples));
+	g_stats->seq++;
+	stats_publish((uintptr_t)g_stats,
+		      offsetof(struct rtos_stats_shm, samples));
 
-	memcpy(s_prev_status, status, count * sizeof(TaskStatus_t));
-	s_prev_count = count;
-	s_prev_total_runtime = total_runtime;
+	if (count > 0) {
+		memcpy(s_prev_status, s_status, count * sizeof(TaskStatus_t));
+		s_prev_count = count;
+		s_prev_total_runtime = total_runtime;
+		s_have_prev = 1;
+	}
 }
 
-static void prvStatsRunTask(void *pvParameters)
+static void prvStatsTimerCb(TimerHandle_t xTimer)
 {
-	(void)pvParameters;
-
-	stats_shm_init();
-	printf("rtos_stats: task started, interval=%ums\n",
-	       (unsigned)RTOS_STATS_SAMPLE_INTERVAL_MS);
-
-	for (;;) {
-		stats_take_sample();
-		vTaskDelay(pdMS_TO_TICKS(RTOS_STATS_SAMPLE_INTERVAL_MS));
-	}
+	(void)xTimer;
+	stats_take_sample();
 }
 
 void rtos_stats_start(void)
 {
-	BaseType_t ret;
+	TimerHandle_t tmr;
 
-	ret = xTaskCreate(prvStatsRunTask, "STATS", STATS_TASK_STACK, NULL,
-			  STATS_TASK_PRIO, NULL);
-	if (ret != pdPASS)
-		printf("rtos_stats: xTaskCreate failed\n");
+	stats_shm_init();
+
+	/*
+	 * Use the timer service task (known-good) rather than a dedicated
+	 * STATS task — the dedicated task was created but never advanced
+	 * samples after scheduler start on this platform.
+	 */
+	tmr = xTimerCreate(STATS_TIMER_NAME,
+			   pdMS_TO_TICKS(RTOS_STATS_SAMPLE_INTERVAL_MS),
+			   pdTRUE, NULL, prvStatsTimerCb);
+	if (!tmr) {
+		printf("rtos_stats: xTimerCreate failed\n");
+		return;
+	}
+	if (xTimerStart(tmr, 0) != pdPASS)
+		printf("rtos_stats: xTimerStart failed\n");
 }
