@@ -3,8 +3,8 @@
 # Start 8051 MCU with factory or runtime-updated firmware.
 # Runs after S04data so /mnt/data may already be mounted.
 #
-# While Linux is up, mcu51-hb bumps RTC_INFO heartbeat so MCU does not RMW
-# GPIOA (shared with FreeRTOS backlight soft-PWM / other LEDs).
+# MCU owns GPIOE0 / PWR_GPIO0 status LED in the RTC power domain and never
+# touches main-domain GPIOA. Default LED mode is blink (mode 0).
 #
 
 NAME=mcu51
@@ -32,15 +32,33 @@ start() {
 
 	mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
 
+	#
+	# Image upgrades put a new factory FW in /lib/firmware while /mnt/data
+	# may keep a stale runtime copy (preferred by mcu51-up). If factory is
+	# newer than runtime, refresh runtime so the board runs the image FW.
+	# Intentional hot-updates via mcu51-update still win when runtime is
+	# newer than factory.
+	#
+	FORCE_RELOAD=""
+	RT_FW="$RUNTIME_DIR/mars_mcu_fw.bin"
+	if [ -f "$FACTORY_FW" ]; then
+		if [ ! -f "$RT_FW" ] || [ "$FACTORY_FW" -nt "$RT_FW" ]; then
+			cp -f "$FACTORY_FW" "$RT_FW" 2>/dev/null || true
+			FORCE_RELOAD="-F"
+			echo "$NAME: synced factory FW -> $RT_FW"
+		fi
+	fi
+
 	echo -n "Starting $NAME: "
-	# Default: skip SRAM rewrite if MCU already running (VBAT keep-alive).
-	# This preserves RTC_INFO2 run_ms and other mailbox values across reboot.
-	# Use: mcu51-up -F  ONLY after a firmware update (that path clears RTC_INFO2).
-	if "$UP" -q; then
+	# Default: skip SRAM rewrite if MCU already running (VBAT keep-alive),
+	# unless we just synced a newer factory image (FORCE_RELOAD=-F).
+	if "$UP" -q $FORCE_RELOAD; then
 		# Default blink mode: 300ms on / 700ms off (preserves HB bits)
 		if [ -x "$LEDCTL" ]; then
 			"$LEDCTL" mode 0 >/dev/null 2>&1 || true
 		fi
+		# Optional heartbeat for status observation (MCU LED no longer
+		# depends on HB ownership because it uses RTC GPIOE0).
 		if [ -x "$HB" ]; then
 			"$HB" start >/dev/null 2>&1 || true
 		fi
