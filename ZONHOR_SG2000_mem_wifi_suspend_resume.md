@@ -15,6 +15,7 @@
 | `echo freeze > /sys/power/state` + 尽快恢复路由器 IP | **可用**。守护进程 resume 后续 DHCP；部分情况下驱动侧关联仍在，可直接判为 healthy。 |
 | `echo mem > /sys/power/state`（deep）SoC 休眠/唤醒 | **可用**。`PM: suspend entry (deep)` → `PM: suspend exit`。 |
 | deep mem 后 WiFi「无感」恢复 | **可用但非固件级零丢联**：resume 后 SDIO 可 `reset_comm`+reinit；FW 关联仍丢，守护进程 **fdrv-only 重载**约 **5–7s** 内恢复（原先 ~12s）。禁止内核内 `cvi_sdio_rescan`（曾 Oops）。 |
+| 多次 mem 后 IPv4 稳定（不双地址、不漂移） | **已修（2026-07-25）**。根因是 recover 用 `udhcpc` 与系统 `dhcpcd` 抢同一 MAC（不同 Client ID → 双租约，如 `.141`+`.139`）。现只走 dhcpcd + MAC `clientid`；`/mnt/data/wlan0.preferred_ip` 记录偏好地址。板测连续 3 次 mem 均回到单一 `192.168.100.141`。 |
 | `wifi-bt-lpm.sh prepare-mem` 后再 deep mem | **高风险，禁止作为默认路径**。曾出现电流回升但系统卡死，软 RST 无法启动，需断全电。 |
 
 板端快捷自测（建议串口；USB RNDIS 在 suspend 期间会断）：
@@ -172,16 +173,31 @@ tx msg fc retry fail / cmd timed-out   # 仍可能丢关联，但少了 wakeup f
 |------|------|
 | `device/zonhor-*/overlay/usr/sbin/zonhor-wifi-pm-recover` | 守护进程：看 `suspend_stats/success`；freeze 偏 DHCP；deep 后非 COMPLETED 则直接重载 AIC |
 | `device/zonhor-*/overlay/etc/init.d/S41wifi-pm` | 开机启动 |
+| `device/zonhor-*/overlay/etc/dhcpcd.conf` | MAC `clientid`、deny `usb0`/`eth0`、wlan0 `noipv4ll`（稳定租约） |
 | `.../usr/sbin/wifi-bt-lpm.sh` → `/mnt/system/wifi-bt-lpm.sh` | PATH 软链 |
 
 恢复策略（摘要）：
 
-1. 已 `COMPLETED` 且有非链路本地 IPv4 → 认为 healthy  
-2. `COMPLETED` 无 IPv4 → `ip -4 addr flush` + `udhcpc`；失败再短 reconnect  
-3. `SCANNING`/`DISCONNECTED` 等 → **跳过长时间 reconnect，直接重载** `aic8800_{bsp,fdrv,btlpm}` + wpa + DHCP  
+1. 已 `COMPLETED` 且**仅有一个**非链路本地 IPv4 → 认为 healthy（并写入 preferred）  
+2. `COMPLETED` 无 IPv4 / 双地址 → `ip -4 addr flush` + **`dhcpcd -k/-n` rebind**（**禁止 udhcpc**）  
+3. `SCANNING`/`DISCONNECTED` 等 → **跳过长时间 reconnect，直接重载** fdrv(+必要时 bsp) + wpa + dhcpcd  
+4. 偏好地址：`/mnt/data/wlan0.preferred_ip`（跨 resume / 模块重载）  
 
 日志：`/var/log/zonhor-wifi-pm.log`  
 调试：`zonhor-wifi-pm-recover status|once|stop`
+
+#### 5.2.1 多次休眠后 IP 变化（已修）
+
+现象：`wlan0` 同时出现两个地址，例如  
+`192.168.100.141`（无 `dynamic`）+ `192.168.100.139`（`dynamic noprefixroute`），或默认路由 src 在两者间跳。
+
+根因：
+
+- 系统常驻 **`dhcpcd`**（`S41dhcpcd`），lease 在 `/var/db/dhcpcd/`  
+- recover 旧逻辑另起 **`udhcpc`** → 与 dhcpcd **Client ID 不同**（duid+IAID vs MAC），路由器发**两份租约**  
+- eth0/wlan0 同 UID 后缀 → duid 模式下 **IAID 冲突**（`wlan0: IAID conflicts with eth0`）加重不稳定  
+
+修复：recover 只调用 dhcpcd；`dhcpcd.conf` 改 `clientid` 并 `denyinterfaces eth0 usb0`。
 
 ### 5.3 板端已验证过的组合（2026-07-25）
 
@@ -208,18 +224,19 @@ tx msg fc retry fail / cmd timed-out   # 仍可能丢关联，但少了 wakeup f
 
 ### P1 — 真正「无感」WiFi（驱动级）
 
-4. **deep resume 后仍 `cmd timed-out` 的根因** — *进行中（2026-07-25）*  
-   - 已加：`sdio_reset_comm` + 强制 wakeup_reg 路径（对照：SDHCI resume 会 `clk_disable` 即便 KEEP_POWER）  
-   - Rockchip 路径仅对 AIC8801 重 claim IRQ；本板为 D80，优先 reset_comm  
-   - 待板上验证：soft 路径是否足以保住关联；若仅 SDIO 字节通、FW 仍死，则走 5  
+4. **deep resume 后仍 `cmd timed-out` 的根因** — *已基本定位（2026-07-25 板测）*  
+   - `sdio_reset_comm` + func reinit → **SDIO 字节通路 OK**（`sdio ready after reinit`）  
+   - FW `me_set_lp_level` 在 bare deep 后会死等 ~3s 并 **毒化 cmd queue** → 已改为 `wifi_suspend_active==0` 时跳过  
+   - 关联仍丢：FW WiFi 栈在 deep 后不可用，需重载 fdrv（重下固件语义）  
+   - 剩余：能否在不卸模组情况下原地重载 FW（真无感）  
 
-5. **resume 失败时内核内 power-cycle** — *已落地（deferred work）*  
-   bus/`me_set_lp_level` 失败后 schedule：`WLAN_POWER` 拉低/拉高 + `cvi_sdio_rescan`。  
-   模组仍加载时会走 remove/probe；用户态需重启 wpa（守护进程已覆盖）。  
+5. **resume 失败时内核内 power-cycle** — *已回退*  
+   `WLAN_POWER`+`cvi_sdio_rescan` 在模组仍加载时会 Oops（`aicbsp_get_feature` NULL）。  
+   硬恢复交给用户态 `rmmod`/`insmod`（bsp `power_on` 路径）。`aicbsp_get_feature` 已加 NULL 防护。  
 
-6. **缩短恢复时间** — *进行中*  
-   守护进程：resume 后 settle 3s→1s；优先等内核 rescan；先试 **只卸 fdrv**；缩短 DHCP/关联轮询。  
-   目标仍是 2–3s；需板测对比。
+6. **缩短恢复时间** — *板测 ~5–7s（目标 2–3s）*  
+   已做：跳过 doomed LP clear、跳过无效 soft reconnect、**fdrv-only** 优先重载。  
+   下一步：进一步压缩 fdrv probe/关联/DHCP；或内核内安全 FW 重载。
 
 ### P2 — 体验与体验
 
@@ -260,7 +277,7 @@ zonhor-wifi-pm-recover status
 tail -f /var/log/zonhor-wifi-pm.log
 /etc/init.d/S41wifi-pm restart
 
-# 手动重载 AIC（与守护进程 hard path 等价）
+# 手动重载 AIC（与守护进程 hard path 等价；DHCP 只用 dhcpcd）
 killall wpa_supplicant udhcpc
 rmmod aic8800_btlpm aic8800_fdrv aic8800_bsp
 insmod /mnt/system/ko/aic8800_bsp.ko
@@ -268,7 +285,8 @@ insmod /mnt/system/ko/aic8800_fdrv.ko
 insmod /mnt/system/ko/aic8800_btlpm.ko
 zonhor-mac-from-uid wlan0
 wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf
-udhcpc -i wlan0 -n -q -t 6
+dhcpcd -n wlan0
+# 看是否双地址：ip -4 addr show wlan0
 ```
 
 重编 fdrv 模块示例：
@@ -292,6 +310,7 @@ linux_5.10/drivers/mmc/host/cvitek/sdhci-cv181x.c
 build/boards/cv181x/sg2000_zonhor_sg2000_glibc_arm64_emmc/dts_arm64/*.dts   # wifisd / wifi_pin / btlpm
 device/zonhor-sg2000-glibc-arm64-emmc/overlay/usr/sbin/zonhor-wifi-pm-recover
 device/zonhor-sg2000-glibc-arm64-emmc/overlay/etc/init.d/S41wifi-pm
+device/zonhor-sg2000-glibc-arm64-emmc/overlay/etc/dhcpcd.conf
 device/zonhor-sg2000-glibc-arm64-emmc/overlay/mnt/system/wifi-bt-lpm.sh
 device/zonhor-sg2000-glibc-arm64-emmc/overlay/mnt/system/duo-init.sh
 device/zonhor-sg2000-glibc-arm64-emmc/overlay/mnt/system/auto.sh
@@ -309,7 +328,9 @@ SG2000_RTC_MACRO_VBAT踩坑记录.md
 2. **不要**假设 soft RST 能清掉 AIC8800 坏状态  
 3. **不要**以为 `wpa_state=COMPLETED` 或接口上还有旧 IPv4 就等于网络可用——要以能 ping 网关 / 新 lease 为准  
 4. **不要**把 `date`/1970 当 RTC 健康；看 `RO_T` / `rtc_mode`（见 RTC 文档）  
-5. **不要**只改源码不更新板上 `/mnt/system/ko/aic8800_fdrv.ko` 就判定「驱动已修」
+5. **不要**只改源码不更新板上 `/mnt/system/ko/aic8800_fdrv.ko` 就判定「驱动已修」  
+6. **不要**在 recover / 手工排障时再跑 `udhcpc`（会与 dhcpcd 双租约导致 IP「变化」）  
+7. **不要**只看 `ip addr` 有地址就认为单一路径——确认 `addr_count==1` 且默认路由 `src` 与之一致
 
 ---
 

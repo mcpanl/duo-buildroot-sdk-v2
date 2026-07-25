@@ -4,6 +4,9 @@
 # Watches /sys/power/suspend_stats/success and restores association / DHCP
 # after freeze or deep mem. Falls back to module reload if SDIO stays dead.
 #
+# DHCP: always use system dhcpcd (never udhcpc). Mixing both clients causes
+# two leases for the same MAC (different Client IDs) → dual/changing IPs.
+#
 # Usage:
 #   zonhor-wifi-pm-recover          # foreground daemon
 #   zonhor-wifi-pm-recover once     # single recover pass
@@ -18,6 +21,8 @@ STATS_SUCCESS=/sys/power/suspend_stats/success
 PIDFILE=/run/zonhor-wifi-pm-recover.pid
 # mmc1 sysfs rescan (wifi SDIO); optional fast path before rmmod
 WIFI_MMC_RESCAN="${ZONHOR_WIFI_MMC_RESCAN:-/sys/bus/platform/drivers/sdhci-cvi/43300000.mmc1/rescan}"
+# Sticky IPv4 across resume / module reload (DATA partition)
+PREFERRED_IP_FILE="${ZONHOR_PREFERRED_IP_FILE:-/mnt/data/wlan0.preferred_ip}"
 
 mkdir -p /var/log /run 2>/dev/null || true
 
@@ -27,12 +32,54 @@ log() {
 	echo "zonhor-wifi-pm: $*"
 }
 
-have_ipv4() {
+current_ipv4() {
 	ip -4 -o addr show dev "$IFACE" 2>/dev/null |
 		awk '/inet / {
 			split($4,a,"/")
 			if (a[1] !~ /^169\.254\./ && a[1] !~ /^0\./) { print a[1]; exit 0 }
-		}' | grep -q .
+		}'
+}
+
+have_ipv4() {
+	[ -n "$(current_ipv4)" ]
+}
+
+# Drop every IPv4 except the one we want (kills udhcpc leftovers / dual lease).
+normalize_ipv4() {
+	want="$1"
+	[ -n "$want" ] || return 0
+	ip -4 -o addr show dev "$IFACE" 2>/dev/null |
+		awk '/inet / {
+			split($4,a,"/")
+			print a[1]
+		}' | while read -r addr; do
+			[ -n "$addr" ] || continue
+			[ "$addr" = "$want" ] && continue
+			case "$addr" in
+			169.254.*|0.*) ;;
+			*)
+				log "drop extra IPv4 $addr (keep $want)"
+				ip -4 addr del "$addr"/24 dev "$IFACE" 2>/dev/null ||
+					ip -4 addr del "$addr" dev "$IFACE" 2>/dev/null || true
+				;;
+			esac
+		done
+}
+
+save_preferred_ip() {
+	ip=$(current_ipv4)
+	[ -n "$ip" ] || return 0
+	dir=$(dirname "$PREFERRED_IP_FILE")
+	mkdir -p "$dir" 2>/dev/null || true
+	if [ -d "$dir" ]; then
+		echo "$ip" >"$PREFERRED_IP_FILE" 2>/dev/null || true
+	fi
+}
+
+load_preferred_ip() {
+	if [ -f "$PREFERRED_IP_FILE" ]; then
+		awk 'NF {print $1; exit}' "$PREFERRED_IP_FILE"
+	fi
 }
 
 wpa_state() {
@@ -44,6 +91,13 @@ wifi_ok() {
 	st=$(wpa_state)
 	[ "$st" = "COMPLETED" ] || return 1
 	have_ipv4 || return 1
+	# Dual-stack leftovers count as unhealthy — force normalize on next recover
+	n=$(ip -4 -o addr show dev "$IFACE" 2>/dev/null |
+		awk '/inet / {
+			split($4,a,"/")
+			if (a[1] !~ /^169\.254\./ && a[1] !~ /^0\./) c++
+		} END { print c+0 }')
+	[ "$n" -le 1 ] 2>/dev/null || return 1
 	return 0
 }
 
@@ -57,11 +111,60 @@ ensure_wpa() {
 	return 0
 }
 
+# System DHCP only. Never start udhcpc alongside dhcpcd.
 renew_dhcp() {
+	# Stop any stray busybox DHCP client left from older recover scripts
 	killall udhcpc 2>/dev/null || true
+
+	want=$(current_ipv4)
+	[ -n "$want" ] || want=$(load_preferred_ip)
+	[ -n "$want" ] && log "preferred IPv4=$want"
+
 	ip -4 addr flush dev "$IFACE" 2>/dev/null || true
-	udhcpc -i "$IFACE" -n -q -t 4 >>"$LOG" 2>&1 || return 1
-	have_ipv4
+
+	if command -v dhcpcd >/dev/null 2>&1; then
+		if pidof dhcpcd >/dev/null 2>&1; then
+			# Release then rebind so lease is reapplied on the new ifindex
+			dhcpcd -k "$IFACE" >>"$LOG" 2>&1 || true
+			sleep 0.2
+			dhcpcd -n "$IFACE" >>"$LOG" 2>&1 || true
+		else
+			log "dhcpcd not running, starting"
+			/etc/init.d/S41dhcpcd start >>"$LOG" 2>&1 || \
+				dhcpcd -b -f /etc/dhcpcd.conf >>"$LOG" 2>&1 || return 1
+			sleep 0.5
+			dhcpcd -n "$IFACE" >>"$LOG" 2>&1 || true
+		fi
+	else
+		# Last resort (images without dhcpcd): request sticky IP
+		log "WARN: dhcpcd missing, fallback udhcpc"
+		if [ -n "$want" ]; then
+			udhcpc -i "$IFACE" -n -q -t 6 -r "$want" >>"$LOG" 2>&1 || \
+				udhcpc -i "$IFACE" -n -q -t 4 >>"$LOG" 2>&1 || return 1
+		else
+			udhcpc -i "$IFACE" -n -q -t 4 >>"$LOG" 2>&1 || return 1
+		fi
+	fi
+
+	i=0
+	while [ "$i" -lt 24 ]; do
+		got=$(current_ipv4)
+		if [ -n "$got" ]; then
+			# If we have a preferred address and got something else, keep
+			# dhcpcd's lease (authoritative) but record it as new preferred.
+			if [ -n "$want" ] && [ "$got" != "$want" ]; then
+				log "dhcp got $got (preferred was $want) — adopting dhcpcd lease"
+			fi
+			normalize_ipv4 "$got"
+			save_preferred_ip
+			log "dhcp ok: $(current_ipv4)"
+			return 0
+		fi
+		sleep 0.5
+		i=$((i + 1))
+	done
+	log "dhcp failed: no IPv4 on $IFACE"
+	return 1
 }
 
 wait_iface() {
@@ -166,7 +269,8 @@ recover_once() {
 	log "wpa_state=${st:-none} ipv4=$(have_ipv4 && echo yes || echo no)"
 
 	if wifi_ok; then
-		log "already healthy"
+		save_preferred_ip
+		log "already healthy ip=$(current_ipv4)"
 		return 0
 	fi
 
@@ -186,22 +290,10 @@ recover_once() {
 			fi
 		fi
 	else
-		# Soft try first: after sdio_reset_comm resume, FW may still be up
-		# and only association was dropped by netif_device_detach/attach.
-		log "not associated ($st), try short reconnect before reload"
-		if command -v wpa_cli >/dev/null 2>&1; then
-			wpa_cli -i "$IFACE" reconnect >>"$LOG" 2>&1 || true
-			i=0
-			while [ "$i" -lt 6 ]; do
-				if [ "$(wpa_state)" = "COMPLETED" ] && renew_dhcp; then
-					log "recover ok: soft reconnect+dhcp"
-					return 0
-				fi
-				sleep 0.5
-				i=$((i + 1))
-			done
-		fi
-		log "soft reconnect failed -> reload"
+		# After deep mem, SCANNING means FW stack is dead even if SDIO
+		# byte path was reinit'd — soft reconnect just wastes ~4s.
+		# Stale IPv4 on a dead association also lands here.
+		log "not associated ($st), skip reconnect -> reload"
 	fi
 
 	if reload_aic; then
@@ -224,6 +316,8 @@ daemon_loop() {
 	echo $$ >"$PIDFILE"
 	prev=$(read_success)
 	log "daemon start pid=$$ suspend_success=$prev"
+	# Capture current good IP at boot so resume can prefer it
+	save_preferred_ip
 	while true; do
 		cur=$(read_success)
 		case "$cur" in
@@ -255,7 +349,9 @@ cmd_status() {
 	fi
 	echo "suspend_success: $(read_success)"
 	echo "iface: $IFACE"
+	echo "preferred_ip_file: $PREFERRED_IP_FILE ($(load_preferred_ip))"
 	ip link show "$IFACE" 2>/dev/null || echo "no $IFACE"
+	ip -4 addr show "$IFACE" 2>/dev/null || true
 	wpa_cli -i "$IFACE" status 2>/dev/null | grep -E 'wpa_state|ip_address|ssid' || true
 	wifi_ok && echo "wifi: ok" || echo "wifi: need-recover"
 	[ -f "$LOG" ] && echo "---- log tail ----" && tail -20 "$LOG"
