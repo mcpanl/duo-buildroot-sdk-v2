@@ -144,8 +144,15 @@ enum axp20x_variants {
 #define AXP2101_ADC_CH_EN0		0x30
 #define AXP2101_VBAT_H			0x34
 #define AXP2101_VBAT_L			0x35
+#define AXP2101_TS_H			0x36
+#define AXP2101_TS_L			0x37
 #define AXP2101_VBUS_H			0x38
 #define AXP2101_VBUS_L			0x39
+#define AXP2101_VSYS_H			0x3a
+#define AXP2101_VSYS_L			0x3b
+#define AXP2101_TDIE_H			0x3c
+#define AXP2101_TDIE_L			0x3d
+#define AXP2101_TS_CFG			0x50
 #define AXP2101_IPRECHG_CFG		0x61
 #define AXP2101_ICC_CFG			0x62
 #define AXP2101_ITERM_CFG		0x63
@@ -177,6 +184,18 @@ enum axp20x_variants {
 #define AXP2101_ICC_MASK		GENMASK(4, 0)
 #define AXP2101_VBAT_H_MASK		GENMASK(5, 0)
 #define AXP2101_VBUS_H_MASK		GENMASK(5, 0)
+#define AXP2101_ADC_VBAT_EN		BIT(0)
+#define AXP2101_ADC_TS_EN		BIT(1)
+#define AXP2101_ADC_VBUS_EN		BIT(2)
+#define AXP2101_ADC_VSYS_EN		BIT(3)
+#define AXP2101_ADC_TDIE_EN		BIT(4)
+/* REG50H: TS pin CTRL — NTC mode, always-on 50uA bias for 10k@25C */
+#define AXP2101_TS_CURR_MASK		GENMASK(1, 0)
+#define AXP2101_TS_CURR_50UA		0x02
+#define AXP2101_TS_SRC_MASK		GENMASK(3, 2)
+#define AXP2101_TS_SRC_ALWAYS_ON	(0x03 << 2)
+#define AXP2101_TS_FUNC_MASK		BIT(4)
+#define AXP2101_TS_FUNC_NTC		0
 #define AXP2101_PONP_IRQ_EN		BIT(0)
 #define AXP2101_PONN_IRQ_EN		BIT(1)
 #define AXP2101_BTN_PWROFF_EN		BIT(1)

@@ -264,6 +264,7 @@ static int cmd_status(void)
 {
 	char buf[64];
 	int online, present, voltage, capacity, current, status;
+	int temp_ntc, temp_die;
 
 	if (read_sysfs_str(PSY_PATH "/status", buf, sizeof(buf)))
 		return fprintf(stderr, "failed to read battery status\n"), 1;
@@ -277,6 +278,10 @@ static int cmd_status(void)
 		printf("voltage_now: %d uV (%.3f V)\n", voltage, voltage / 1000000.0);
 	if (!read_sysfs_int(PSY_PATH "/capacity", &capacity))
 		printf("capacity: %d %%\n", capacity);
+	if (!read_sysfs_int(PSY_PATH "/temp", &temp_ntc))
+		printf("ntc_temp: %d (%.1f C)\n", temp_ntc, temp_ntc / 10.0);
+	if (!read_sysfs_int(PSY_PATH "/temp_ambient", &temp_die))
+		printf("die_temp: %d (%.1f C)\n", temp_die, temp_die / 10.0);
 	if (!read_sysfs_int(PSY_PATH "/constant_charge_current", &current))
 		printf("charge_current: %d uA (%.0f mA)\n", current, current / 1000.0);
 	if (!read_sysfs_int(PSY_PATH "/status", &status))

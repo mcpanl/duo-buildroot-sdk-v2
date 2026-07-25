@@ -160,9 +160,6 @@ static void pwm_cv_disable(struct pwm_chip *chip,
 	pr_debug("pwm_cv_disable: value = %x\n", value);
 	writel(value, our_chip->base + REG_PWM_OE);
 	writel(value, our_chip->base + REG_PWMSTART);
-
-	writel(1, our_chip->base + REG_GROUP * pwm_dev->hwpwm + REG_PERIOD);
-	writel(2, our_chip->base + REG_GROUP * pwm_dev->hwpwm + REG_HLPERIOD);
 }
 
 static int pwm_cv_set_polarity(struct pwm_chip *chip,

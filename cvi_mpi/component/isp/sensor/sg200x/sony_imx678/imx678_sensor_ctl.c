@@ -499,7 +499,6 @@ int imx678_read_register(VI_PIPE ViPipe, int addr)
 	}
 
 	data = buf[0];
-	syslog(LOG_DEBUG, "i2c r 0x%x = 0x%x\n", addr, data);
 	return data;
 }
 
@@ -522,7 +521,6 @@ int imx678_write_register(VI_PIPE ViPipe, int addr, int data)
 			      addr, errno, strerror(errno));
 		return CVI_FAILURE;
 	}
-	syslog(LOG_DEBUG, "i2c w 0x%x 0x%x\n", addr, data);
 	return CVI_SUCCESS;
 }
 

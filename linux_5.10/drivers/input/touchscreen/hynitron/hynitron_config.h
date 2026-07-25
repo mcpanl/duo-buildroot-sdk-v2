@@ -13,8 +13,9 @@
 /*
  * show debug log info
  * enable it for debug, disable it for release
+ * Default off: touch IRQ / report path must not spam dmesg & console.
  */
-#define HYN_DEBUG_EN                            1
+#define HYN_DEBUG_EN                            0
 
 /*
  * Linux MultiTouch Protocol

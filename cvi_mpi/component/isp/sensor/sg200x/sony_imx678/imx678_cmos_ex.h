@@ -7,11 +7,23 @@ extern "C" {
 #endif
 #endif
 
+#include <stdio.h>
+#include <syslog.h>
 #include <linux/cvi_type.h>
 #include "cvi_sns_ctrl.h"
 
+/*
+ * No syslogd on target: map to printf, but honor syslog priority so
+ * LOG_DEBUG I2C r/w traces stay quiet by default (match CVI WARN level).
+ */
+#ifndef IMX678_SYSLOG_MAX_LEVEL
+#define IMX678_SYSLOG_MAX_LEVEL LOG_WARNING
+#endif
 #define syslog(level, fmt, ...) \
-	do { printf(fmt, ##__VA_ARGS__); } while (0)
+	do { \
+		if (((level) & 0x7) <= IMX678_SYSLOG_MAX_LEVEL) \
+			printf(fmt, ##__VA_ARGS__); \
+	} while (0)
 
 enum imx678_linear_regs_e {
 	LINEAR_HOLD = 0,

@@ -1,24 +1,26 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Zonhor JD9853 LCD backlight: Linux sysfs proxy → FreeRTOS soft-PWM.
+ * Zonhor JD9853 LCD backlight sysfs → GPIOA20 (+ optional RTOS notify).
  *
- * Userspace keeps /sys/class/backlight/zonhor-lcd-bl (0..100). This driver
- * does NOT drive GPIOA20; it sends DISPLAY_CMD_BL (param_ptr = duty 0..100)
- * to C906L FreeRTOS, which bit-bangs soft-PWM on PAD_JTAG_CPU_TRST.
+ * GPIOA is shared with Linux leds (sys-led A29). FreeRTOS must not RMW
+ * SWPORTA_DR after this driver claims the backlight GPIO — otherwise Linux
+ * bgpio shadow restores stale BL bits and the panel flashes with activity.
  *
- * Module params:
- *   brightness=<0..100>   default duty after probe
- *   pwm_hz=<Hz>           kept for ABI; ignored (RTOS uses fixed 1 kHz)
+ * Brightness is digital on the wire: 0 = off, 1..100 = on. Module still
+ * exports 0..100 for userspace ABI.
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/of_gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/backlight.h>
 #include <linux/fb.h>
 #include <linux/slab.h>
 #include <linux/io.h>
+#include <linux/gpio.h>
 
 #include "display_shm.h"
 #include "rtos_cmdqu.h"
@@ -27,29 +29,30 @@
 #define BL_NAME			"zonhor-lcd-bl"
 #define BL_MAX			100
 #define BL_DEFAULT		60
+#define BL_GPIO_DEFAULT		500	/* GPIOA20 = 480+20 on cv181x */
 
 struct zonhor_bl {
 	struct device *dev;
 	struct backlight_device *bd;
-	unsigned int brightness;	/* requested 0..100 */
+	struct gpio_desc *gpio;
+	int gpio_num;			/* legacy raw gpio, or -1 */
+	unsigned int brightness;
 };
 
 static int param_brightness = BL_DEFAULT;
-static int param_pwm_hz = 1000;	/* ABI compatibility only */
+static int param_pwm_hz = 1000;
+static int param_gpio = -1;
 
 module_param_named(brightness, param_brightness, int, 0444);
 MODULE_PARM_DESC(brightness, "Initial brightness 0..100");
 module_param_named(pwm_hz, param_pwm_hz, int, 0444);
-MODULE_PARM_DESC(pwm_hz, "Unused (RTOS soft-PWM frequency is fixed)");
+MODULE_PARM_DESC(pwm_hz, "Unused (kept for ABI)");
+module_param_named(gpio, param_gpio, int, 0444);
+MODULE_PARM_DESC(gpio, "Legacy backlight GPIO number (default 500=GPIOA20)");
 
 static struct platform_device *zonhor_bl_pdev;
 static struct zonhor_bl *g_bl;
 
-/*
- * display_shm header shares one 64B cache line with RTOS heartbeat. Publish
- * the full line after Linux updates bl_on/bl_level so C906L does not
- * resurrect a stale duty from its next clean_dcache_range().
- */
 static void zonhor_bl_publish_hdr(struct display_shm *shm)
 {
 	u8 tmp[64];
@@ -59,7 +62,17 @@ static void zonhor_bl_publish_hdr(struct display_shm *shm)
 	mb();
 }
 
-static void zonhor_bl_send_rtos(unsigned int level)
+static void zonhor_bl_drive_gpio(struct zonhor_bl *bl, unsigned int level)
+{
+	int on = level ? 1 : 0;
+
+	if (bl->gpio)
+		gpiod_set_value_cansleep(bl->gpio, on);
+	else if (bl->gpio_num >= 0)
+		gpio_set_value(bl->gpio_num, on);
+}
+
+static void zonhor_bl_notify_rtos(unsigned int level)
 {
 	cmdqu_t cmdq = { 0 };
 	struct display_shm *shm;
@@ -67,7 +80,6 @@ static void zonhor_bl_send_rtos(unsigned int level)
 	if (level > BL_MAX)
 		level = BL_MAX;
 
-	/* Also poke SHM so RTOS can apply BL if mailbox slots are exhausted. */
 	shm = memremap(CVIMMAP_DISPLAY_SHM_ADDR, sizeof(*shm), MEMREMAP_WT);
 	if (!shm)
 		shm = memremap(CVIMMAP_DISPLAY_SHM_ADDR, sizeof(*shm), MEMREMAP_WC);
@@ -75,6 +87,11 @@ static void zonhor_bl_send_rtos(unsigned int level)
 		if (shm->magic == DISPLAY_SHM_MAGIC) {
 			shm->bl_level = level;
 			shm->bl_on = level ? 1 : 0;
+			/*
+			 * Claim display-side Linux ownership so RTOS stops
+			 * RMW on GPIOA20 even if lcd-proxy has not probed yet.
+			 */
+			shm->linux_ready = 1;
 			zonhor_bl_publish_hdr(shm);
 		}
 		memunmap(shm);
@@ -102,10 +119,12 @@ static unsigned int zonhor_bl_effective_bri(struct zonhor_bl *bl)
 
 static void zonhor_bl_apply(struct zonhor_bl *bl)
 {
-	zonhor_bl_send_rtos(zonhor_bl_effective_bri(bl));
+	unsigned int level = zonhor_bl_effective_bri(bl);
+
+	zonhor_bl_drive_gpio(bl, level);
+	zonhor_bl_notify_rtos(level);
 }
 
-/* Optional API for zonhor_lcd_proxy fb_blank */
 int zonhor_lcd_bl_set_enable(int on)
 {
 	struct zonhor_bl *bl = g_bl;
@@ -161,6 +180,36 @@ static const struct backlight_ops zonhor_bl_ops = {
 	.get_brightness = zonhor_bl_get_brightness,
 };
 
+static int zonhor_bl_request_gpio(struct device *dev, struct zonhor_bl *bl)
+{
+	int ret;
+
+	bl->gpio = NULL;
+	bl->gpio_num = -1;
+
+	bl->gpio = devm_gpiod_get_optional(dev, "enable", GPIOD_OUT_HIGH);
+	if (IS_ERR(bl->gpio)) {
+		ret = PTR_ERR(bl->gpio);
+		bl->gpio = NULL;
+		dev_err(dev, "enable-gpios invalid: %d\n", ret);
+		return ret;
+	}
+	if (bl->gpio)
+		return 0;
+
+	if (param_gpio < 0)
+		param_gpio = BL_GPIO_DEFAULT;
+
+	ret = devm_gpio_request_one(dev, param_gpio,
+				    GPIOF_OUT_INIT_HIGH, BL_NAME);
+	if (ret) {
+		dev_err(dev, "gpio %d request failed: %d\n", param_gpio, ret);
+		return ret;
+	}
+	bl->gpio_num = param_gpio;
+	return 0;
+}
+
 static int zonhor_bl_probe_common(struct device *dev, struct zonhor_bl *bl)
 {
 	struct backlight_properties props = { };
@@ -181,6 +230,10 @@ static int zonhor_bl_probe_common(struct device *dev, struct zonhor_bl *bl)
 			bri = def_bri;
 	}
 
+	ret = zonhor_bl_request_gpio(dev, bl);
+	if (ret)
+		return ret;
+
 	bl->dev = dev;
 	bl->brightness = bri;
 
@@ -200,7 +253,7 @@ static int zonhor_bl_probe_common(struct device *dev, struct zonhor_bl *bl)
 	g_bl = bl;
 	backlight_update_status(bl->bd);
 	dev_info(dev,
-		 "%s: RTOS soft-PWM via mailbox, brightness=%u/100\n",
+		 "%s: Linux GPIOA20 owner (digital on/off), brightness=%u/100\n",
 		 BL_NAME, bl->brightness);
 	return 0;
 }
@@ -225,7 +278,8 @@ static int zonhor_bl_remove(struct platform_device *pdev)
 	if (!bl)
 		return 0;
 
-	zonhor_bl_send_rtos(0);
+	zonhor_bl_drive_gpio(bl, 0);
+	zonhor_bl_notify_rtos(0);
 	if (g_bl == bl)
 		g_bl = NULL;
 	return 0;
@@ -256,10 +310,6 @@ static int __init zonhor_bl_init(void)
 	if (ret)
 		return ret;
 
-	/*
-	 * Bring-up without DTB: insmod cv181x_zonhor_lcd_bl.ko
-	 * Creates a non-OF platform device (brightness= module param).
-	 */
 	np = of_find_compatible_node(NULL, NULL, "zonhor,lcd-bl");
 	if (!np)
 		np = of_find_compatible_node(NULL, NULL, "cvitek,zonhor-lcd-bl");
@@ -289,6 +339,6 @@ module_init(zonhor_bl_init);
 module_exit(zonhor_bl_exit);
 
 MODULE_AUTHOR("Zonhor");
-MODULE_DESCRIPTION("Zonhor LCD backlight mailbox proxy (RTOS soft-PWM)");
+MODULE_DESCRIPTION("Zonhor LCD backlight (Linux GPIO owner, digital on/off)");
 MODULE_LICENSE("GPL");
 MODULE_SOFTDEP("pre: cv181x_rtos_cmdqu");

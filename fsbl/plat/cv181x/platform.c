@@ -510,11 +510,21 @@ void switch_rtc_mode_1st_stage(void)
 		
 #endif
 
-#ifdef CONFIG_SUSPEND
-	return;
-#endif
+	/*
+	 * zonhor / SG2000 gotcha (do NOT restore the old "#ifdef CONFIG_SUSPEND
+	 * return;" early exit):
+	 *
+	 * Stock SDK skipped this entire function when SUSPEND=y. Cold boot then
+	 * left rtc_mode=0 forever. Digital SEC_CNTR still ticked from ~0 after
+	 * each main-power cycle, but analog MACRO RO_T (0x050264A8, VBAT) never
+	 * came up. Worse: Linux hwclock -w / cvi_rtc_set_time still did
+	 * DA_CLEAR_ALL and zeroed any residual RO_T.
+	 *
+	 * Warmboot already returns above. Cold boot MUST run this so VBAT can
+	 * keep wall-clock across main VDD loss. See SG2000_RTC_MACRO_VBAT踩坑记录.md
+	 */
 
-	// reg_rtc_mode = rtc_ctrl0[10]
+	/* reg_rtc_mode = rtc_ctrl0[10] */
 	read_data = mmio_read_32(REG_RTC_CTRL_BASE + RTC_CTRL0);
 	rtc_mode = (read_data >> 10) & 0x1;
 	if (rtc_mode == 0x1) {
@@ -525,31 +535,30 @@ void switch_rtc_mode_1st_stage(void)
 	mmio_write_32(REG_RTC_CTRL_BASE + RTC_CTRL0_UNLOCKKEY, 0xAB18);
 	read_data = mmio_read_32(REG_RTC_CTRL_BASE + RTC_CTRL0);
 
-	// reg_clk32k_cg_en = rtc_ctrl0[11] -> 0
+	/* reg_clk32k_cg_en = rtc_ctrl0[11] -> 0 */
 	write_data = 0x08000000 | (read_data & 0xfffff7ff);
 	mmio_write_32(REG_RTC_CTRL_BASE + RTC_CTRL0, write_data);
 
-	//cg_en_out_clk_32k = rtc_ctrl_status0[25]
+	/* cg_en_out_clk_32k = rtc_ctrl_status0[25] */
 	read_data = mmio_read_32(REG_RTC_CTRL_BASE + RTC_CTRL0_STATUS0);
 	while ((read_data & 0x02000000) != 0x00)
 		read_data = mmio_read_32(REG_RTC_CTRL_BASE + RTC_CTRL0_STATUS0);
 
 	read_data = mmio_read_32(REG_RTC_CTRL_BASE + RTC_CTRL0);
-	//r eg_rtc_mode = rtc_ctrl0[10];
+	/* reg_rtc_mode = rtc_ctrl0[10] := 1  (enables MACRO path) */
 	write_data = 0x04000000 | (read_data & 0xfffffbff) | (0x1 << 10);
 	mmio_write_32(REG_RTC_CTRL_BASE + RTC_CTRL0, write_data);
 
-	// DA_SOC_READY = 1
+	/* Pulse DA_SOC_READY @ RTC_MACRO_BASE+0x8C (= 0x0502648C) */
 	mmio_write_32(RTC_MACRO_BASE + 0x8C, 0x01);
-	// DA_SOC_READY = 0
 	mmio_write_32(RTC_MACRO_BASE + 0x8C, 0x0);
 
-	udelay(200); // delay ~200us
+	udelay(200); /* delay ~200us */
 
 	read_data = mmio_read_32(REG_RTC_CTRL_BASE + RTC_CTRL0);
-	// reg_clk32k_cg_en = rtc_ctrl0[11] -> 1
+	/* reg_clk32k_cg_en = rtc_ctrl0[11] -> 1 */
 	write_data = 0x0C000000 | (read_data & 0xffffffff) | (0x1 << 11);
-	mmio_write_32(REG_RTC_CTRL_BASE + RTC_CTRL0, write_data); //rtc_ctrl0
+	mmio_write_32(REG_RTC_CTRL_BASE + RTC_CTRL0, write_data);
 }
 
 void switch_rtc_mode_2nd_stage(void)
@@ -557,18 +566,21 @@ void switch_rtc_mode_2nd_stage(void)
 	uint32_t read_data;
 	uint32_t write_data;
 
-	// mdelay(50);
+	/* mdelay(50); */
 	read_data = mmio_read_32(REG_RTC_CTRL_BASE + RTC_CTRL0_STATUS0);
 	if (get_pkg() == PKG_QFN || (read_data & 0x02000000) == 0x00) {
+		/*
+		 * Internal 32k path (stock SDK cleared rtc_mode[10] here).
+		 * That undid 1st_stage MACRO enable on QFN / no-xtal boards and
+		 * re-exposed the DA_CLEAR_ALL wipe bug. Keep bit10=1.
+		 */
 		read_data = mmio_read_32(REG_RTC_CTRL_BASE + RTC_CTRL0);
-		// reg_rtc_mode = rtc_ctrl0[10]
-		write_data = 0x0C000000 | (read_data & 0xfffffbff);
+		mmio_write_32(REG_RTC_CTRL_BASE + RTC_CTRL0_UNLOCKKEY, 0xAB18);
+		write_data = 0x0C000000 | read_data | (0x1 << 10) | (0x1 << 11);
 		mmio_write_32(REG_RTC_CTRL_BASE + RTC_CTRL0, write_data);
-		//DA_SOC_READY = 1
 		mmio_write_32(RTC_MACRO_BASE + 0x8C, 0x01);
-		//DA_SOC_READY = 0
 		mmio_write_32(RTC_MACRO_BASE + 0x8C, 0x00);
-		NOTICE("Use internal 32k\n");
+		NOTICE("Use internal 32k (keep rtc_mode for MACRO)\n");
 	} else
 		NOTICE("Switch RTC mode to xtal32k\n");
 }

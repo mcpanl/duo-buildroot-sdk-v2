@@ -1,5 +1,15 @@
 /*
- * An RTC driver for the CVITEK RTC.
+ * An RTC driver for the CVITEK / SG2000 (CV181x) RTC.
+ *
+ * Two second counters (base 0x05026000):
+ *   SEC_CNTR @ +0x18  (0x05026018) — digital domain; clears when main VDD drops
+ *   RO_T     @ +0x4A8 (0x050264A8) — analog MACRO; VBAT-backed wall-clock
+ *
+ * RTC_CTRL0 (0x05025008) bit10 = rtc_mode. MACRO bring-up needs rtc_mode=1
+ * (FSBL switch_rtc_mode_1st_stage). Writing DA_CLEAR_ALL while rtc_mode=0
+ * wipes RO_T to 0 — never hwclock -w / set_time until mode is enabled.
+ *
+ * See repo root: SG2000_RTC_MACRO_VBAT踩坑记录.md
  */
 #include <linux/kernel.h>
 #include <linux/bcd.h>
@@ -15,6 +25,7 @@
 #include <linux/pm.h>
 #include <linux/of.h>
 #include <linux/version.h>
+#include <linux/bitops.h>
 #include <asm/div64.h>
 #include <linux/io.h>
 
@@ -31,17 +42,27 @@
 #define CVI_RTC_EN_PWR_WAKEUP			0xBC
 #define CVI_RTC_PWR_DET_SEL				0x140
 
-/* CVITEK RTC MACRO registers */
-#define RTC_MACRO_DA_CLEAR_ALL			0x480
-#define RTC_MACRO_DA_SOC_READY			0x48C
-#define RTC_MACRO_RO_T					0x4A8
-#define RTC_MACRO_RG_SET_T				0x498
+/*
+ * RTC MACRO (analog / always-on) — offsets from rtc_base 0x05026000
+ * (== RTC_MACRO_BASE 0x05026400 + local offset in U-Boot headers).
+ */
+#define RTC_MACRO_DA_CLEAR_ALL			0x480	/* wipe/latch handshake; DANGER if rtc_mode=0 */
+#define RTC_MACRO_DA_SOC_READY			0x48C	/* pulse after mode switch or set_time */
+#define RTC_MACRO_RG_SET_T				0x498	/* write Unix seconds into MACRO */
+#define RTC_MACRO_RO_T					0x4A8	/* read-only free-running Unix seconds (VBAT) */
 
-/* CVITEK RTC CTRL registers */
+/* CVITEK RTC CTRL registers (second resource: 0x05025000) */
+#define CVI_RTC_CTRL0_UNLOCKKEY			0x4	/* write 0xAB18 before CTRL0 */
+#define CVI_RTC_CTRL0					0x8
+#define CVI_RTC_CTRL0_STATUS0			0xC
 #define CVI_RTC_FC_COARSE_EN			0x40
 #define CVI_RTC_FC_COARSE_CAL			0x44
 #define CVI_RTC_FC_FINE_EN				0x48
 #define CVI_RTC_FC_FINE_CAL				0x50
+
+#define CVI_RTC_CTRL0_RTC_MODE			BIT(10)	/* 1 = MACRO path enabled */
+#define CVI_RTC_CTRL0_CLK32K_CG_EN		BIT(11)
+#define CVI_RTC_STATUS0_OUT_CLK_32K		BIT(25)
 
 #define RTC_SEC_MAX_VAL		0xFFFFFFFF
 
@@ -59,6 +80,64 @@ struct cvi_rtc_info {
 	struct delayed_work cvi_rtc_work;
 };
 
+/*
+ * Ensure RTC_CTRL0.rtc_mode=1 so VBAT MACRO (RO_T) can be used.
+ *
+ * Observed on SG2000/zonhor (2026-07):
+ * - Fresh boot with CONFIG_SUSPEND FSBL left rtc_mode=0 → RO_T stuck at 0
+ *   until this (or FSBL 1st-stage) sequence ran once.
+ * - hwclock -w / set_time with DA_CLEAR_ALL while rtc_mode=0 zeroed a
+ *   previously valid RO_T (battery still present) — irreversible until
+ *   re-sync from NTP.
+ *
+ * Sequence mirrors FSBL switch_rtc_mode_1st_stage() in
+ * fsbl/plat/cv181x/platform.c. MCU51 RTCSYS_RST does NOT affect this.
+ */
+static void cvi_rtc_ensure_macro_mode(struct cvi_rtc_info *info)
+{
+	u32 ctrl, status;
+	unsigned int i;
+
+	if (!info->rtc_base || !info->rtc_ctrl_base)
+		return;
+
+	ctrl = readl(info->rtc_ctrl_base + CVI_RTC_CTRL0);
+	if (ctrl & CVI_RTC_CTRL0_RTC_MODE)
+		return;
+
+	dev_notice(&info->pdev->dev,
+		   "rtc_mode=0, enabling MACRO for VBAT timekeeping\n");
+
+	writel(0xAB18, info->rtc_ctrl_base + CVI_RTC_CTRL0_UNLOCKKEY);
+	ctrl = readl(info->rtc_ctrl_base + CVI_RTC_CTRL0);
+	/* clk32k_cg_en[11] -> 0 */
+	writel(0x08000000 | (ctrl & ~CVI_RTC_CTRL0_CLK32K_CG_EN),
+	       info->rtc_ctrl_base + CVI_RTC_CTRL0);
+
+	for (i = 0; i < 100; i++) {
+		status = readl(info->rtc_ctrl_base + CVI_RTC_CTRL0_STATUS0);
+		if (!(status & CVI_RTC_STATUS0_OUT_CLK_32K))
+			break;
+		udelay(100);
+	}
+
+	writel(0xAB18, info->rtc_ctrl_base + CVI_RTC_CTRL0_UNLOCKKEY);
+	ctrl = readl(info->rtc_ctrl_base + CVI_RTC_CTRL0);
+	/* rtc_mode[10] = 1 */
+	writel(0x04000000 | (ctrl & ~CVI_RTC_CTRL0_RTC_MODE) | CVI_RTC_CTRL0_RTC_MODE,
+	       info->rtc_ctrl_base + CVI_RTC_CTRL0);
+
+	writel(1, info->rtc_base + RTC_MACRO_DA_SOC_READY);
+	writel(0, info->rtc_base + RTC_MACRO_DA_SOC_READY);
+	udelay(200);
+
+	writel(0xAB18, info->rtc_ctrl_base + CVI_RTC_CTRL0_UNLOCKKEY);
+	ctrl = readl(info->rtc_ctrl_base + CVI_RTC_CTRL0);
+	/* clk32k_cg_en[11] -> 1 */
+	writel(0x0C000000 | ctrl | CVI_RTC_CTRL0_CLK32K_CG_EN,
+	       info->rtc_ctrl_base + CVI_RTC_CTRL0);
+}
+
 static int cvi_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
 	struct cvi_rtc_info *info = dev_get_drvdata(dev);
@@ -68,12 +147,13 @@ static int cvi_rtc_read_time(struct device *dev, struct rtc_time *tm)
 
 	spin_lock_irqsave(&info->cvi_rtc_lock, sl_irq_flags);
 
+	/* Prefer VBAT MACRO if it holds a plausible Unix epoch. */
 	sec = readl(info->rtc_base + CVI_RTC_SEC_CNTR_VALUE);
 	sec_ro_t = readl(info->rtc_base + RTC_MACRO_RO_T);
 
 	if (sec_ro_t > 0x30000000) {
 		sec = sec_ro_t;
-		// Writeback to SEC CVI_RTC_SEC_CNTR_VALUE
+		/* Digital domain may have reset; copy MACRO → SEC_CNTR */
 		writel(sec, info->rtc_base + CVI_RTC_SET_SEC_CNTR_VALUE);
 		writel(1, info->rtc_base + CVI_RTC_SET_SEC_CNTR_TRIG);
 	} else if (sec < 0x30000000) {
@@ -132,19 +212,30 @@ static int cvi_rtc_set_time(struct device *dev, struct rtc_time *tm)
 		tm->tm_sec
 	);
 
+	/*
+	 * Order matters: ensure rtc_mode=1 BEFORE any MACRO DA_CLEAR_ALL.
+	 * Digital SEC_CNTR is always updated; MACRO only if mode is healthy.
+	 */
+	cvi_rtc_ensure_macro_mode(info);
+
 	spin_lock_irqsave(&info->cvi_rtc_lock, sl_irq_flags);
 
 	writel(sec, info->rtc_base + CVI_RTC_SET_SEC_CNTR_VALUE);
 	writel(1, info->rtc_base + CVI_RTC_SET_SEC_CNTR_TRIG);
 
-	writel(sec, info->rtc_base + RTC_MACRO_RG_SET_T);
+	if (readl(info->rtc_ctrl_base + CVI_RTC_CTRL0) & CVI_RTC_CTRL0_RTC_MODE) {
+		writel(sec, info->rtc_base + RTC_MACRO_RG_SET_T);
 
-	writel(1, info->rtc_base + RTC_MACRO_DA_CLEAR_ALL);
-	writel(1, info->rtc_base + RTC_MACRO_DA_SOC_READY);
+		writel(1, info->rtc_base + RTC_MACRO_DA_CLEAR_ALL);
+		writel(1, info->rtc_base + RTC_MACRO_DA_SOC_READY);
 
-	writel(0, info->rtc_base + RTC_MACRO_DA_CLEAR_ALL);
-	writel(0, info->rtc_base + RTC_MACRO_RG_SET_T);
-	writel(0, info->rtc_base + RTC_MACRO_DA_SOC_READY);
+		writel(0, info->rtc_base + RTC_MACRO_DA_CLEAR_ALL);
+		writel(0, info->rtc_base + RTC_MACRO_RG_SET_T);
+		writel(0, info->rtc_base + RTC_MACRO_DA_SOC_READY);
+	} else {
+		/* Refuse MACRO handshake — protects battery-backed RO_T. */
+		dev_err(dev, "rtc_mode still 0, skip MACRO write to protect RO_T\n");
+	}
 
 	spin_unlock_irqrestore(&info->cvi_rtc_lock, sl_irq_flags);
 
@@ -411,6 +502,12 @@ static int __init cvi_rtc_probe(struct platform_device *pdev)
 
 	device_init_wakeup(&pdev->dev, 1);
 
+	/*
+	 * Before rtc_device_register() (and hctosys), bring MACRO up so the
+	 * first RTC_RD_TIME can return VBAT time instead of 1970.
+	 */
+	cvi_rtc_ensure_macro_mode(info);
+
 	info->rtc_dev = devm_rtc_device_register(&pdev->dev,
 				dev_name(&pdev->dev), &cvi_rtc_ops,
 				THIS_MODULE);
@@ -435,18 +532,37 @@ static int __init cvi_rtc_probe(struct platform_device *pdev)
 #endif
 
 #if defined(CV_RTC_FINE_CALIB)
-	if ((readl(info->rtc_ctrl_base + 0x8) & 0x400) == 0x0) {
-		/* Enable calibration only when use internal osc */
+	/*
+	 * Stock SDK calibrated only when rtc_mode=0 (internal osc).
+	 * After ensure_macro_mode(), bit10 is usually 1 → skip calib.
+	 * Prefer keeping MACRO / wall-clock over fine-tuning 32k here.
+	 */
+	if ((readl(info->rtc_ctrl_base + CVI_RTC_CTRL0) & CVI_RTC_CTRL0_RTC_MODE) == 0) {
 		rtc_32k_coarse_value_calib(info);
 		rtc_32k_fine_value_calib(info);
 		dev_notice(&pdev->dev, "rtc 32k calibration has been completed\n");
 	} else {
-		dev_notice(&pdev->dev, "Disable calibration because using external xtal\n");
+		dev_notice(&pdev->dev, "Disable calibration because rtc_mode/MACRO enabled\n");
 	}
 
 #endif
 
 	rtc_enable_sec_counter(info);
+
+	/*
+	 * Main VDD power-cycle zeros SEC_CNTR; RO_T should still hold Unix
+	 * time if VBAT stayed up. Push MACRO → digital before userspace.
+	 */
+	{
+		u32 sec_ro_t = readl(info->rtc_base + RTC_MACRO_RO_T);
+
+		if (sec_ro_t > 0x30000000) {
+			writel(sec_ro_t, info->rtc_base + CVI_RTC_SET_SEC_CNTR_VALUE);
+			writel(1, info->rtc_base + CVI_RTC_SET_SEC_CNTR_TRIG);
+			dev_notice(&pdev->dev,
+				   "restored SEC_CNTR from MACRO RO_T=%u\n", sec_ro_t);
+		}
+	}
 
 	dev_notice(&pdev->dev, "CVITEK real time clock\n");
 

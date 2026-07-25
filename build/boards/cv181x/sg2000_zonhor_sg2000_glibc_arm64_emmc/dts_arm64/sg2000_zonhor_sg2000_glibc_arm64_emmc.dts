@@ -68,11 +68,12 @@
 	};
 
 	/*
-	 * JD9853 backlight: Linux sysfs proxy only. Soft-PWM on GPIOA20
-	 * (PAD_JTAG_CPU_TRST) runs on FreeRTOS via DISPLAY_CMD_BL mailbox.
+	 * JD9853 backlight: Linux owns GPIOA20 after probe (digital on/off).
+	 * RTOS only drives the pin for the U-Boot splash handoff window.
 	 */
 	zonhor_lcd_bl: lcd-bl {
 		compatible = "zonhor,lcd-bl";
+		enable-gpios = <&porta 20 GPIO_ACTIVE_HIGH>;
 		default-brightness = <60>;
 		status = "okay";
 	};

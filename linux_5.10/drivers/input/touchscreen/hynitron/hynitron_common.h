@@ -233,17 +233,18 @@ extern int hyn_reset_proc(int hdelayms);
 void hyn_irq_disable(void);
 void hyn_irq_enable(void);
 
+/* Errors always go to kernel log; verbose DEBUG/INFO are gated by HYN_DEBUG_EN. */
+#define HYN_ERROR(fmt, args...) printk(KERN_ERR "[HYN][Error]"fmt"\n", ##args)
+
 #if HYN_DEBUG_EN
 #define HYN_DEBUG_LEVEL     1
 
 #if (HYN_DEBUG_LEVEL == 2)
 #define HYN_DEBUG(fmt, args...) printk(KERN_ERR "[HYN][%s]"fmt"\n", __func__, ##args)
 #define HYN_INFO(fmt, args...)  printk(KERN_ERR "[HYN][Info][%s]"fmt"\n",__func__, ##args)
-#define HYN_ERROR(fmt, args...) printk(KERN_ERR "[HYN][Error][%s]"fmt"\n",__func__, ##args)
 #else
 #define HYN_DEBUG(fmt, args...) printk(KERN_ERR "[HYN]"fmt"\n", ##args)
 #define HYN_INFO(fmt, args...)  printk(KERN_ERR "[HYN][Info]"fmt"\n", ##args)
-#define HYN_ERROR(fmt, args...) printk(KERN_ERR "[HYN][Error]"fmt"\n", ##args)
 #endif
 
 #define HYN_FUNC_ENTER() printk(KERN_ERR "[HYN]%s: Enter\n", __func__)
@@ -251,7 +252,6 @@ void hyn_irq_enable(void);
 #else
 #define HYN_DEBUG(fmt, args...)
 #define HYN_INFO(fmt, args...)
-#define HYN_ERROR(fmt, args...)
 #define HYN_FUNC_ENTER()
 #define HYN_FUNC_EXIT()
 #endif

@@ -1,10 +1,68 @@
 #!/bin/sh
 #
-# Load SG2000 on-chip RTC and sync system time from hardware clock.
+# S02hwclock — SG2000 / CV181x (zonhor) early RTC bring-up
+#
+# Goals:
+#   1) Ensure rtc_mode=1 so VBAT-backed MACRO (RO_T @ 0x050264A8) is usable
+#   2) Load cv181x_rtc.ko and hwclock -s → system time
+#   3) On stop: hwclock -w only if rtc_mode=1 (otherwise RO_T is wiped)
+#
+# Background / do-nots: see repo root SG2000_RTC_MACRO_VBAT踩坑记录.md
+# Related: osdrv/interdrv/rtc/cv181x/cvi_rtc.c, fsbl/plat/cv181x/platform.c
 #
 
 RTC_KO=/mnt/system/ko/cv181x_rtc.ko
 RTC_DEV=/dev/rtc0
+DEVMEM=busybox
+
+# RTC_CTRL0 @ 0x05025008 — bit10 rtc_mode, bit11 clk32k_cg_en
+rtc_ctrl0() { "$DEVMEM" devmem 0x05025008 32; }
+# MACRO free-running Unix seconds (VBAT)
+rtc_ro_t()  { "$DEVMEM" devmem 0x050264A8 32; }
+
+# Equivalent to FSBL switch_rtc_mode_1st_stage() when mode is still 0.
+ensure_rtc_macro() {
+	ctrl=$("$DEVMEM" devmem 0x05025008 32)
+	ctrl_val=$(printf %d "$ctrl")
+	if [ $(( (ctrl_val >> 10) & 1 )) -eq 1 ]; then
+		return 0
+	fi
+
+	echo "S02hwclock: enabling rtc_mode for VBAT MACRO"
+	"$DEVMEM" devmem 0x05025004 32 0xAB18
+	ctrl=$("$DEVMEM" devmem 0x05025008 32)
+	ctrl_val=$(printf %d "$ctrl")
+	# clk32k_cg_en[11] -> 0
+	w=$(( (ctrl_val & 0xfffff7ff) | 0x08000000 ))
+	"$DEVMEM" devmem 0x05025008 32 "$(printf 0x%08X "$w")"
+
+	i=0
+	while [ "$i" -lt 50 ]; do
+		s=$("$DEVMEM" devmem 0x0502500C 32)
+		s_val=$(printf %d "$s")
+		[ $(( (s_val >> 25) & 1 )) -eq 0 ] && break
+		i=$((i + 1))
+		sleep 0.01
+	done
+
+	"$DEVMEM" devmem 0x05025004 32 0xAB18
+	ctrl=$("$DEVMEM" devmem 0x05025008 32)
+	ctrl_val=$(printf %d "$ctrl")
+	# rtc_mode[10]=1
+	w=$(( (ctrl_val & 0xfffffbff) | 0x04000000 | (1 << 10) ))
+	"$DEVMEM" devmem 0x05025008 32 "$(printf 0x%08X "$w")"
+
+	# DA_SOC_READY pulse
+	"$DEVMEM" devmem 0x0502648C 32 0x1
+	"$DEVMEM" devmem 0x0502648C 32 0x0
+	sleep 0.001
+
+	"$DEVMEM" devmem 0x05025004 32 0xAB18
+	ctrl=$("$DEVMEM" devmem 0x05025008 32)
+	ctrl_val=$(printf %d "$ctrl")
+	w=$(( ctrl_val | 0x0C000000 | (1 << 11) ))
+	"$DEVMEM" devmem 0x05025008 32 "$(printf 0x%08X "$w")"
+}
 
 load_rtc() {
 	[ -e "$RTC_DEV" ] && return 0
@@ -17,19 +75,29 @@ load_rtc() {
 
 case "$1" in
 start)
+	ensure_rtc_macro || true
 	if load_rtc; then
-		if hwclock -s 2>/dev/null; then
-			echo "S02hwclock: synced system time from $RTC_DEV"
+		# Driver probe also ensures mode; calling again is harmless.
+		ensure_rtc_macro || true
+		if hwclock -s -f "$RTC_DEV" 2>/dev/null; then
+			echo "S02hwclock: synced system time from $RTC_DEV (RO_T=$(rtc_ro_t))"
 		else
-			echo "S02hwclock: $RTC_DEV ready, hwclock sync skipped"
+			echo "S02hwclock: $RTC_DEV ready, hwclock -s skipped (RO_T=$(rtc_ro_t))"
 		fi
 	else
 		echo "S02hwclock: RTC driver not available"
 	fi
 	;;
 stop)
+	# CRITICAL: never hwclock -w while rtc_mode=0 — DA_CLEAR_ALL zeros RO_T.
+	ensure_rtc_macro || true
 	if [ -e "$RTC_DEV" ]; then
-		hwclock -w 2>/dev/null
+		if [ $(( ($(printf %d "$(rtc_ctrl0)") >> 10) & 1 )) -eq 1 ]; then
+			hwclock -w -f "$RTC_DEV" 2>/dev/null
+			echo "S02hwclock: wrote system time to RTC (RO_T=$(rtc_ro_t))"
+		else
+			echo "S02hwclock: skip hwclock -w (rtc_mode=0, protect RO_T)"
+		fi
 	fi
 	;;
 restart|reload)

@@ -6,6 +6,15 @@ Required properties:
 This child node is instantiated by the AXP2101 MFD driver and exposes
 battery/charger information through the Linux power supply class.
 
+Temperatures (when the TS pin has an external NTC and ADC/TS bias are
+enabled by the driver):
+- power_supply "temp"          : external NTC temperature (0.1 degC)
+- power_supply "temp_ambient"  : PMIC die temperature (0.1 degC)
+- thermal_zone type "axp2101-ntc" : same NTC reading (millidegC)
+- thermal_zone type "axp2101-die" : same die reading (millidegC)
+
+NTC conversion uses the AXP2101 datasheet 10kOhm@25C / 50uA lookup table.
+
 Example:
 
 &i2c1 {

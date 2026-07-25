@@ -1,76 +1,35 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * JD9853 backlight soft-PWM on GPIOA20 (PAD_JTAG_CPU_TRST, active-high).
- * Runs on C906L so Linux only sends on/off + duty via DISPLAY_CMD_BL.
+ * JD9853 backlight on GPIOA20 (PAD_JTAG_CPU_TRST, active-high).
  *
- * IMPORTANT: mid-level duty must use vTaskDelay (not udelay busy-wait).
- * A busy soft-PWM loop starves lower-priority tasks (stats, etc.) and can
- * stall mailbox consumers on this single-core RTOS.
+ * Early boot (U-Boot + RTOS before Linux lcd-bl): this file drives the pin.
+ * After Linux sets display_shm.linux_ready and probes zonhor_lcd_bl, Linux
+ * owns GPIOA20 via gpiod. RTOS must stop RMW on SWPORTA_DR — otherwise it
+ * races Linux bgpio shadow (sys-led on A29) and BL flashes with activity.
+ *
+ * Dimming is digital only here: 0 = off, 1..100 = on. True PWM needs a
+ * dedicated PWM block or a pin outside GPIOA.
  */
-#include "FreeRTOS.h"
-#include "task.h"
-
-#include "delay.h"
 #include "gpio.h"
 #include "mmio.h"
 #include "pinctrl.h"
 #include "jd9853_panel.h"
+#include "display_shm.h"
+#include "arch_helpers.h"
 
 #define PIN_BL			GPIOA(20)
 #define BL_MAX			100u
-/* Coarse software PWM period; must be >= 2 FreeRTOS ticks. */
-#define BL_PWM_PERIOD_MS	10u
 
-static volatile unsigned g_bl_level = 0;	/* 0..100 effective duty */
+static volatile unsigned g_bl_level = 0;
 static volatile int g_bl_ready;
+static struct display_shm *g_bl_shm;
 
-static void jd9853_bl_set_pin(int high)
+static int jd9853_bl_linux_owns_pin(void)
 {
-	gpio_set_value(PIN_BL, high ? 1 : 0);
-}
-
-static void jd9853_bl_pwm_task(void *pvParameters)
-{
-	(void)pvParameters;
-
-	for (;;) {
-		unsigned level = g_bl_level;
-
-		if (!g_bl_ready || level == 0) {
-			jd9853_bl_set_pin(0);
-			vTaskDelay(pdMS_TO_TICKS(BL_PWM_PERIOD_MS));
-			continue;
-		}
-		if (level >= BL_MAX) {
-			jd9853_bl_set_pin(1);
-			vTaskDelay(pdMS_TO_TICKS(BL_PWM_PERIOD_MS));
-			continue;
-		}
-
-		/*
-		 * One soft-PWM period with blocking delays so lower-priority
-		 * tasks can run. Granularity is one tick (~1–10 ms).
-		 */
-		{
-			TickType_t period = pdMS_TO_TICKS(BL_PWM_PERIOD_MS);
-			TickType_t on_ticks;
-			TickType_t off_ticks;
-
-			if (period < 2)
-				period = 2;
-			on_ticks = (period * level) / BL_MAX;
-			if (on_ticks == 0)
-				on_ticks = 1;
-			if (on_ticks >= period)
-				on_ticks = period - 1;
-			off_ticks = period - on_ticks;
-
-			jd9853_bl_set_pin(1);
-			vTaskDelay(on_ticks);
-			jd9853_bl_set_pin(0);
-			vTaskDelay(off_ticks);
-		}
-	}
+	if (!g_bl_shm)
+		return 0;
+	inv_dcache_range((uintptr_t)g_bl_shm, 64);
+	return g_bl_shm->linux_ready ? 1 : 0;
 }
 
 void jd9853_bl_pwm_init(unsigned initial_level)
@@ -78,22 +37,16 @@ void jd9853_bl_pwm_init(unsigned initial_level)
 	if (initial_level > BL_MAX)
 		initial_level = BL_MAX;
 
+	g_bl_shm = (struct display_shm *)(uintptr_t)CVIMMAP_DISPLAY_SHM_ADDR;
+
 	PINMUX_CONFIG(JTAG_CPU_TRST, XGPIOA_20);
 	/*
-	 * Inherit U-Boot backlight state. Driving the pin low here used to
-	 * create a multi-second black gap until Linux lcd-bl probed.
+	 * Inherit U-Boot backlight state. Do not force low here — that used
+	 * to create a multi-second black gap until Linux lcd-bl probed.
 	 */
 	gpio_direction_output(PIN_BL, initial_level ? 1 : 0);
 	g_bl_level = initial_level;
 	g_bl_ready = 1;
-
-	/*
-	 * Must outrank DISPLAY (IDLE+4). DISPLAY busy-paces with arch_usleep
-	 * and only taskYIELD(); a lower-priority BL_PWM never runs, mailbox
-	 * slots fill up, and GPIOA20 sticks at the init level.
-	 */
-	xTaskCreate(jd9853_bl_pwm_task, "BL_PWM", configMINIMAL_STACK_SIZE,
-		    NULL, tskIDLE_PRIORITY + 6, NULL);
 }
 
 void jd9853_set_backlight_level(unsigned level)
@@ -102,13 +55,14 @@ void jd9853_set_backlight_level(unsigned level)
 		level = BL_MAX;
 	g_bl_level = level;
 
-	/* Apply steady levels immediately so off/full-on do not wait for task. */
 	if (!g_bl_ready)
 		return;
-	if (level == 0)
-		jd9853_bl_set_pin(0);
-	else if (level >= BL_MAX)
-		jd9853_bl_set_pin(1);
+
+	/* Hand off pin to Linux once lcd-bl / proxy has claimed GPIOA. */
+	if (jd9853_bl_linux_owns_pin())
+		return;
+
+	gpio_set_value(PIN_BL, level ? 1 : 0);
 }
 
 unsigned jd9853_get_backlight_level(void)

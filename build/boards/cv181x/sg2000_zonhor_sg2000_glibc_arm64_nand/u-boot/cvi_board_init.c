@@ -4,9 +4,13 @@ static void set_rtc_register_for_power(void)
 
 	/*
 	 * RTC_EN_PWR_VBAT_DET @ 0x050260D0 — power/VBAT detect enables.
-	 * This is NOT a reset of RTC time or RTC_INFO0-3 mailbox.
-	 * Writing 0x7 restores bits cleared earlier by FSBL for power policy.
-	 * Do not touch RTC_INFO2 (run_ms) here.
+	 * This is NOT a reset of RTC time, MACRO RO_T (0x050264A8), or
+	 * RTC_INFO0-3 mailbox. Writing 0x7 restores bits cleared earlier by
+	 * FSBL for power policy. Do not touch RTC_INFO2 (run_ms) here.
+	 *
+	 * VBAT wall-clock depends on rtc_mode + MACRO; see
+	 * SG2000_RTC_MACRO_VBAT踩坑记录.md — do not "fix" time by poking
+	 * random RTC regs here.
 	 */
 	mmio_write_32(0x050260D0, 0x7);
 }

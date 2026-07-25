@@ -354,10 +354,10 @@ void prvDisplayRunTask(void *pvParameters)
 		unsigned bl = 100;
 
 		display_hdr_inv();
-		if (g_shm->bl_on && g_shm->bl_level)
-			bl = g_shm->bl_level;
-		else if (!g_shm->bl_on)
+		if (!g_shm->bl_on)
 			bl = 0;
+		else if (g_shm->bl_level)
+			bl = g_shm->bl_level;
 		jd9853_bl_pwm_init(bl);
 		printf("display: bl_pwm init level=%u\n", bl);
 	}
@@ -416,20 +416,21 @@ void prvDisplayRunTask(void *pvParameters)
 			if (g_shm->dirty)
 				display_flush_frame();
 			/*
-			 * Always drive BL from SHM. Mailbox often fails when
-			 * slots are exhausted; relying on "level changed" alone
-			 * also misses the case where g_bl_level already matches
-			 * but the pin was left stuck (e.g. after pinmux fights).
+			 * Apply BL only when SHM duty changes. Re-driving the
+			 * pin every loop RMW-fights Linux gpio-leds on GPIOA
+			 * (sys-led A29) and makes BL flash with activity.
 			 */
-			display_apply_bl(g_shm->bl_level);
+			if (g_shm->bl_level != jd9853_get_backlight_level())
+				display_apply_bl(g_shm->bl_level);
 		} else if (g_shm) {
 			display_hdr_inv();
-			display_apply_bl(g_shm->bl_level);
+			if (g_shm->bl_level != jd9853_get_backlight_level())
+				display_apply_bl(g_shm->bl_level);
 		}
 
 		/*
-		 * Prefer a real tick delay so BL_PWM / CMDQU can run. Fall back
-		 * to a short busy pace + yield if the tick looks unhealthy.
+		 * Prefer a real tick delay so CMDQU can run. Fall back to a
+		 * short busy pace + yield if the tick looks unhealthy.
 		 */
 		{
 			TickType_t t0 = xTaskGetTickCount();

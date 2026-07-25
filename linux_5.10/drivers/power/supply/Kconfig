@@ -345,7 +345,10 @@ config BATTERY_AXP2101
 	depends on MFD_AXP20X
 	help
 	  Say Y here to enable support for X-Powers AXP2101 PMIC battery and
-	  charger reporting via the power supply framework.
+	  charger reporting via the power supply framework. Also exposes
+	  external NTC (TS) and PMIC die temperatures via power_supply and
+	  thermal_zone (axp2101-ntc / axp2101-die) when CONFIG_THERMAL is
+	  enabled.
 
 	  To compile this driver as a module, choose M here. The module will
 	  be called axp2101_battery.

@@ -36,11 +36,18 @@ buzzer_export() {
 	[ -d "$PWM_CHAN" ]
 }
 
+buzzer_config() {
+	# cv181x_pwm disable() used to clobber HW period/duty; sysfs skips
+	# pwm_cv_config when SW state is unchanged. Nudge period to force it.
+	echo $((PERIOD_NS + 1)) > "$PWM_CHAN/period" 2>/dev/null
+	echo "$PERIOD_NS" > "$PWM_CHAN/period" || return 1
+	echo "$DUTY_NS" > "$PWM_CHAN/duty_cycle" || return 1
+}
+
 buzzer_on() {
 	ensure_pwm || return 1
 	buzzer_export || return 1
-	echo "$PERIOD_NS" > "$PWM_CHAN/period" || return 1
-	echo "$DUTY_NS" > "$PWM_CHAN/duty_cycle" || return 1
+	buzzer_config || return 1
 	echo 1 > "$PWM_CHAN/enable" || return 1
 }
 
