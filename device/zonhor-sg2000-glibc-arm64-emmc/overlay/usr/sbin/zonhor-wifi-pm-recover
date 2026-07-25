@@ -16,6 +16,8 @@ KO_DIR="${ZONHOR_KO_DIR:-/mnt/system/ko}"
 LOG="${ZONHOR_WIFI_PM_LOG:-/var/log/zonhor-wifi-pm.log}"
 STATS_SUCCESS=/sys/power/suspend_stats/success
 PIDFILE=/run/zonhor-wifi-pm-recover.pid
+# mmc1 sysfs rescan (wifi SDIO); optional fast path before rmmod
+WIFI_MMC_RESCAN="${ZONHOR_WIFI_MMC_RESCAN:-/sys/bus/platform/drivers/sdhci-cvi/43300000.mmc1/rescan}"
 
 mkdir -p /var/log /run 2>/dev/null || true
 
@@ -42,7 +44,6 @@ wifi_ok() {
 	st=$(wpa_state)
 	[ "$st" = "COMPLETED" ] || return 1
 	have_ipv4 || return 1
-	# Stale IP while not associated must not count as healthy
 	return 0
 }
 
@@ -59,43 +60,99 @@ ensure_wpa() {
 renew_dhcp() {
 	killall udhcpc 2>/dev/null || true
 	ip -4 addr flush dev "$IFACE" 2>/dev/null || true
-	udhcpc -i "$IFACE" -n -q -t 6 >>"$LOG" 2>&1 || return 1
+	udhcpc -i "$IFACE" -n -q -t 4 >>"$LOG" 2>&1 || return 1
 	have_ipv4
 }
 
-reload_aic() {
-	log "reload AIC8800 modules"
+wait_iface() {
+	i=0
+	while [ "$i" -lt 20 ]; do
+		ip link show "$IFACE" >/dev/null 2>&1 && return 0
+		sleep 0.2
+		i=$((i + 1))
+	done
+	return 1
+}
+
+wait_completed() {
+	i=0
+	while [ "$i" -lt 15 ]; do
+		[ "$(wpa_state)" = "COMPLETED" ] && return 0
+		sleep 0.5
+		i=$((i + 1))
+	done
+	return 1
+}
+
+# Soft kernel path: if driver already power-cycled/rescanned, just bring wpa back.
+bringup_wpa_dhcp() {
+	wait_iface || return 1
 	killall wpa_supplicant udhcpc 2>/dev/null || true
-	ip link set "$IFACE" down 2>/dev/null || true
-	rmmod aic8800_btlpm 2>/dev/null || true
-	rmmod aic8800_fdrv 2>/dev/null || true
-	rmmod aic8800_bsp 2>/dev/null || true
-	sleep 1
-	insmod "$KO_DIR/aic8800_bsp.ko" || return 1
-	sleep 1
-	insmod "$KO_DIR/aic8800_fdrv.ko" || return 1
-	sleep 1
-	insmod "$KO_DIR/aic8800_btlpm.ko" 2>/dev/null || true
-	sleep 2
 	if [ -x /usr/sbin/zonhor-mac-from-uid ]; then
 		/usr/sbin/zonhor-mac-from-uid "$IFACE" >>"$LOG" 2>&1 || true
 	fi
 	ip link set "$IFACE" up 2>/dev/null || true
 	wpa_supplicant -B -i "$IFACE" -c "$WPA_CONF" >>"$LOG" 2>&1 || return 1
-	i=0
-	while [ "$i" -lt 25 ]; do
-		st=$(wpa_state)
-		[ "$st" = "COMPLETED" ] && break
-		sleep 1
-		i=$((i + 1))
-	done
+	wait_completed || return 1
 	renew_dhcp
+}
+
+# Faster hard path: unload fdrv(+btlpm) first; only wipe bsp if still dead.
+# Full bsp reload triggers WLAN power-on + cvi_sdio_rescan (~same as cold plug).
+reload_aic() {
+	log "reload AIC8800 (fast: fdrv first)"
+	killall wpa_supplicant udhcpc 2>/dev/null || true
+	ip link set "$IFACE" down 2>/dev/null || true
+
+	rmmod aic8800_btlpm 2>/dev/null || true
+	rmmod aic8800_fdrv 2>/dev/null || true
+	# Give SDIO threads a moment to exit without the old 1s sleep
+	sleep 0.2
+
+	if [ -f "$KO_DIR/aic8800_fdrv.ko" ] && lsmod | grep -q '^aic8800_bsp '; then
+		insmod "$KO_DIR/aic8800_fdrv.ko" || true
+		insmod "$KO_DIR/aic8800_btlpm.ko" 2>/dev/null || true
+		if wait_iface && bringup_wpa_dhcp; then
+			log "recover ok: fdrv-only reload"
+			return 0
+		fi
+		log "fdrv-only insufficient, full bsp reload"
+		rmmod aic8800_btlpm 2>/dev/null || true
+		rmmod aic8800_fdrv 2>/dev/null || true
+	fi
+
+	rmmod aic8800_bsp 2>/dev/null || true
+	sleep 0.3
+	insmod "$KO_DIR/aic8800_bsp.ko" || return 1
+	# bsp power-on already rescans; brief wait for probe
+	sleep 0.5
+	insmod "$KO_DIR/aic8800_fdrv.ko" || return 1
+	insmod "$KO_DIR/aic8800_btlpm.ko" 2>/dev/null || true
+	bringup_wpa_dhcp
+}
+
+trigger_mmc_rescan() {
+	if [ -f "$WIFI_MMC_RESCAN" ]; then
+		log "trigger mmc rescan via $WIFI_MMC_RESCAN"
+		echo 1 >"$WIFI_MMC_RESCAN" 2>>"$LOG" || true
+		sleep 0.8
+	fi
 }
 
 recover_once() {
 	log "recover start (iface=$IFACE)"
 	if ! ip link show "$IFACE" >/dev/null 2>&1; then
-		log "no $IFACE, try module reload"
+		log "no $IFACE — wait for kernel power-cycle/rescan, else reload"
+		# Kernel resume work may already be reprobing
+		if wait_iface && bringup_wpa_dhcp; then
+			log "recover ok: iface returned (kernel rescan)"
+			return 0
+		fi
+		trigger_mmc_rescan
+		if wait_iface && bringup_wpa_dhcp; then
+			log "recover ok: after mmc rescan"
+			return 0
+		fi
 		if reload_aic; then
 			log "recover ok after reload (no iface)"
 			return 0
@@ -122,7 +179,7 @@ recover_once() {
 		log "dhcp renew failed while COMPLETED, try reconnect"
 		if command -v wpa_cli >/dev/null 2>&1; then
 			wpa_cli -i "$IFACE" reconnect >>"$LOG" 2>&1 || true
-			sleep 4
+			sleep 2
 			if [ "$(wpa_state)" = "COMPLETED" ] && renew_dhcp; then
 				log "recover ok: reconnect+dhcp"
 				return 0
@@ -162,12 +219,12 @@ daemon_loop() {
 		if [ "$cur" -gt "$prev" ] 2>/dev/null; then
 			log "detected resume (success $prev -> $cur)"
 			prev=$cur
-			sleep 3
+			# Shorter settle: driver does reset_comm / optional power-cycle
+			sleep 1
 			recover_once || true
-			# Second chance if still unhealthy (SDIO settle)
 			if ! wifi_ok; then
 				log "still unhealthy, retry recover"
-				sleep 2
+				sleep 1
 				recover_once || true
 			fi
 		fi

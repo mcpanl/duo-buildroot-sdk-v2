@@ -160,9 +160,9 @@ tx msg fc retry fail / cmd timed-out   # 仍可能丢关联，但少了 wakeup f
 | 点 | 改动 |
 |----|------|
 | `aicwf_sdio_suspend` | 进系统休眠前：`pwr_stctl(ACTIVE)` + `pwrctl_timer(0)` + 拉高 `HOST_WAKE`；**不再**强制 `SDIO_SLEEP_ST` |
-| `aicwf_sdio_resume` | 先 `HOST_WAKE` + `msleep(10)`，清 `is_bus_suspend`，再 `pwr_stctl(ACTIVE)`，再 `rwnx_set_wifi_suspend('0')` |
+| `aicwf_sdio_resume` | `HOST_WAKE` → **`sdio_reset_comm`**（SDHCI 时钟切断后重建 SDIO）→ 强制走 wakeup 路径 `ACTIVE` → `rwnx_set_wifi_suspend('0')`；失败则再试一次；仍失败则 **deferred WLAN 断电复位 + `cvi_sdio_rescan`** |
 | `aicwf_sdio_wakeup` | 写 `wakeup_reg` 前再确保 `HOST_WAKE` |
-| `rwnx_set_wifi_suspend('0')` | 加长 settle（约 20ms），先 ACTIVE 再清 FW LP level |
+| `rwnx_set_wifi_suspend('0')` | 加长 settle（约 20ms），先 ACTIVE 再清 FW LP level；**返回错误码** |
 
 热更新：重编 `aic8800_fdrv.ko` 拷到板子 `/mnt/system/ko/` 后 `rmmod`/`insmod` 即可（无需整包刷机）。
 
@@ -208,17 +208,18 @@ tx msg fc retry fail / cmd timed-out   # 仍可能丢关联，但少了 wakeup f
 
 ### P1 — 真正「无感」WiFi（驱动级）
 
-4. **deep resume 后仍 `cmd timed-out` 的根因**  
-   在「已 ACTIVE、无 wakeup fail 风暴」前提下，继续查：  
-   - SDHCI keep-power 后是否需 `sdio_reset_comm` / 重申 IRQ  
-   - FW 是否需 wow/重下固件而非仅 wakeup_reg  
-   - 与 Rockchip 等平台 AIC 参考 resume 差异  
+4. **deep resume 后仍 `cmd timed-out` 的根因** — *进行中（2026-07-25）*  
+   - 已加：`sdio_reset_comm` + 强制 wakeup_reg 路径（对照：SDHCI resume 会 `clk_disable` 即便 KEEP_POWER）  
+   - Rockchip 路径仅对 AIC8801 重 claim IRQ；本板为 D80，优先 reset_comm  
+   - 待板上验证：soft 路径是否足以保住关联；若仅 SDIO 字节通、FW 仍死，则走 5  
 
-5. **resume 失败时内核内 power-cycle**  
-   在 `aicwf_sdio_resume` 检测 cmd 超时后，拉低/拉高 `WLAN_POWER` + `cvi_sdio_rescan`，减少用户态 rmmod 窗口（仍要处理 netdev/wpa 生命周期）。
+5. **resume 失败时内核内 power-cycle** — *已落地（deferred work）*  
+   bus/`me_set_lp_level` 失败后 schedule：`WLAN_POWER` 拉低/拉高 + `cvi_sdio_rescan`。  
+   模组仍加载时会走 remove/probe；用户态需重启 wpa（守护进程已覆盖）。  
 
-6. **缩短恢复时间**  
-   目标从 ~12s 降到 2–3s：预加载、只卸 fdrv、或 suspend 前保存关联上下文。
+6. **缩短恢复时间** — *进行中*  
+   守护进程：resume 后 settle 3s→1s；优先等内核 rescan；先试 **只卸 fdrv**；缩短 DHCP/关联轮询。  
+   目标仍是 2–3s；需板测对比。
 
 ### P2 — 体验与体验
 

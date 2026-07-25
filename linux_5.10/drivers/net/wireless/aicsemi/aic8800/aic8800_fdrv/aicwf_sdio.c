@@ -27,6 +27,8 @@
 #include <linux/pm_wakeup.h>
 #endif
 #include "rwnx_wakelock.h"
+#include <linux/workqueue.h>
+#include <linux/delay.h>
 
 #ifdef CONFIG_INGENIC_T20
 #include "mach/jzmmc.h"
@@ -45,7 +47,12 @@ extern uint8_t scanning;
 #ifdef CONFIG_PLATFORM_CVITEK
 extern int cvi_get_wifi_wakeup_gpio(void);
 extern int cvi_get_wifi_host_wake_gpio(void);
+extern int cvi_get_wifi_pwr_on_gpio(void);
+extern int cvi_sdio_rescan(void);
 #endif
+
+/* Not always declared in headers on this tree; exported by mmc/core/sdio.c */
+extern int sdio_reset_comm(struct mmc_card *card);
 
 #ifdef CONFIG_GPIO_WAKEUP
 extern int rwnx_send_me_set_lp_level(struct rwnx_hw *rwnx_hw, u8 lp_level);
@@ -54,7 +61,7 @@ extern int rwnx_send_me_set_lp_level(struct rwnx_hw *rwnx_hw, u8 lp_level);
 #include <linux/proc_fs.h>
 void rwnx_init_wifi_suspend_node(void);
 void rwnx_deinit_wifi_suspend_node(void);
-void rwnx_set_wifi_suspend(char onoff);
+int rwnx_set_wifi_suspend(char onoff);
 struct proc_dir_entry *wifi_suspend_node;
 #endif//CONFIG_WIFI_SUSPEND_FOR_LINUX
 
@@ -342,7 +349,7 @@ void rwnx_pm_relax(struct aic_sdio_dev *sdiodev){
 
 #ifdef CONFIG_GPIO_WAKEUP
 
-void rwnx_set_wifi_suspend(char onoff);
+int rwnx_set_wifi_suspend(char onoff);
 
 static void rwnx_wifi_host_wake_set(int assert)
 {
@@ -811,6 +818,55 @@ void aicwf_sdio_remove_(struct sdio_func *func){
     aicwf_sdio_remove(func);
 }
 
+#ifdef CONFIG_PLATFORM_CVITEK
+static void aicwf_sdio_power_cycle_workfn(struct work_struct *work)
+{
+	int gpio = cvi_get_wifi_pwr_on_gpio();
+	int ret;
+
+	if (gpio <= 0) {
+		sdio_err("%s: no WLAN_POWER gpio\n", __func__);
+		return;
+	}
+
+	/*
+	 * GPIO may already be requested by aicbsp as WLAN_POWER. Prefer
+	 * gpio_set_value; fall back to direction_output if needed.
+	 */
+	sdio_err("%s: WLAN power-cycle + cvi_sdio_rescan (resume recover)\n",
+		 __func__);
+	gpio_set_value(gpio, 0);
+	msleep(200);
+	gpio_set_value(gpio, 1);
+	msleep(80);
+	ret = cvi_sdio_rescan();
+	if (ret)
+		sdio_err("%s: cvi_sdio_rescan failed %d\n", __func__, ret);
+}
+
+static DECLARE_WORK(aicwf_sdio_power_cycle_work, aicwf_sdio_power_cycle_workfn);
+
+static void aicwf_sdio_schedule_power_cycle(void)
+{
+	if (!schedule_work(&aicwf_sdio_power_cycle_work))
+		sdio_dbg("%s: power-cycle work already queued\n", __func__);
+}
+#endif
+
+static int aicwf_sdio_bus_probe_alive(struct aic_sdio_dev *sdiodev)
+{
+	u8 val = 0;
+	int ret;
+
+	if (!sdiodev || !sdiodev->func)
+		return -ENODEV;
+
+	ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.sleep_reg, &val);
+	if (ret)
+		return ret;
+	return 0;
+}
+
 static int aicwf_sdio_suspend(struct device *dev)
 {
 	int ret = 0;
@@ -875,9 +931,8 @@ static int aicwf_sdio_resume(struct device *dev)
 	struct aicwf_bus *bus_if = dev_get_drvdata(dev);
 	struct aic_sdio_dev *sdiodev = bus_if->bus_priv.sdio;
 	struct rwnx_vif *rwnx_vif, *tmp;
-#if defined(CONFIG_PLATFORM_ROCKCHIP) || defined(CONFIG_PLATFORM_ROCKCHIP2)
-	int ret;
-#endif
+	int ret = 0;
+	int bus_ok;
 
 	sdio_dbg("%s enter \n", __func__);
 //#ifdef CONFIG_GPIO_WAKEUP
@@ -891,8 +946,9 @@ static int aicwf_sdio_resume(struct device *dev)
 
 	/*
 	 * After deep (mem) suspend the AIC8800 often ignores SDIO wakeup_reg
-	 * writes until HOST_WAKE_WF is asserted. Do GPIO wake first, then
-	 * bring the SDIO link ACTIVE, then clear FW LP level.
+	 * writes until HOST_WAKE_WF is asserted. Do GPIO wake first, re-init
+	 * SDIO signaling (host clock was cut despite KEEP_POWER), then bring
+	 * the link ACTIVE and clear FW LP level.
 	 */
 #ifdef CONFIG_GPIO_WAKEUP
 	rwnx_wifi_host_wake_set(1);
@@ -901,7 +957,18 @@ static int aicwf_sdio_resume(struct device *dev)
 
 	atomic_set(&sdiodev->is_bus_suspend, 0);
 
+	if (sdiodev->func && sdiodev->func->card) {
+		ret = sdio_reset_comm(sdiodev->func->card);
+		if (ret)
+			sdio_err("%s: sdio_reset_comm failed %d\n", __func__, ret);
+	}
+
 #if defined(CONFIG_SDIO_PWRCTRL)
+	/*
+	 * We left ACTIVE across suspend so pwr_stctl would no-op. Force the
+	 * wakeup_reg path once to validate the bus after reset_comm.
+	 */
+	sdiodev->state = SDIO_SLEEP_ST;
 	aicwf_sdio_pwr_stctl(sdiodev, SDIO_ACTIVE_ST);
 #endif
 
@@ -921,8 +988,29 @@ static int aicwf_sdio_resume(struct device *dev)
 	}
 #endif
 #ifdef CONFIG_WIFI_SUSPEND_FOR_LINUX
-	rwnx_set_wifi_suspend('0');
+	ret = rwnx_set_wifi_suspend('0');
+	if (ret) {
+		sdio_err("%s: clear FW LP failed %d, retry after settle\n",
+			 __func__, ret);
+		msleep(50);
+		if (sdiodev->func && sdiodev->func->card)
+			sdio_reset_comm(sdiodev->func->card);
+#if defined(CONFIG_SDIO_PWRCTRL)
+		sdiodev->state = SDIO_SLEEP_ST;
+		aicwf_sdio_pwr_stctl(sdiodev, SDIO_ACTIVE_ST);
 #endif
+		ret = rwnx_set_wifi_suspend('0');
+	}
+#endif
+
+	bus_ok = aicwf_sdio_bus_probe_alive(sdiodev);
+	if (bus_ok || ret) {
+		sdio_err("%s: bus/FW still bad (bus=%d fw=%d)\n",
+			 __func__, bus_ok, ret);
+#ifdef CONFIG_PLATFORM_CVITEK
+		aicwf_sdio_schedule_power_cycle();
+#endif
+	}
 
 	sdio_dbg("%s exit\n", __func__);
 	return 0;
@@ -2666,13 +2754,13 @@ uint8_t crc8_ponl_107(uint8_t *p_buffer, uint16_t cal_size)
 }
 
 #ifdef CONFIG_WIFI_SUSPEND_FOR_LINUX
-void rwnx_set_wifi_suspend(char onoff){
+int rwnx_set_wifi_suspend(char onoff){
 	int ret = 0;
 	struct aic_sdio_dev *sdiodev;
 
 	if (!g_rwnx_plat || !g_rwnx_plat->sdiodev || !g_rwnx_plat->sdiodev->rwnx_hw) {
 		pr_err("%s: wifi not ready\n", __func__);
-		return;
+		return -ENODEV;
 	}
 	sdiodev = g_rwnx_plat->sdiodev;
 
@@ -2682,8 +2770,9 @@ void rwnx_set_wifi_suspend(char onoff){
 		/* Deep mem resume needs more settle time before SDIO/FW cmds */
 		msleep(20);
 		aicwf_sdio_pwr_stctl(sdiodev, SDIO_ACTIVE_ST);
-		rwnx_send_me_set_lp_level(sdiodev->rwnx_hw, 0);
-		wifi_suspend_active = 0;
+		ret = rwnx_send_me_set_lp_level(sdiodev->rwnx_hw, 0);
+		if (!ret)
+			wifi_suspend_active = 0;
 	} else {
 		printk("%s suspend\n", __func__);
 		ret = rwnx_send_me_set_lp_level(sdiodev->rwnx_hw, 1);
@@ -2700,6 +2789,7 @@ void rwnx_set_wifi_suspend(char onoff){
 			wifi_suspend_active = 1;
 		}
 	}
+	return ret;
 }
 
 static int rwnx_wifi_suspend_status_show(struct seq_file *m, void *v)
