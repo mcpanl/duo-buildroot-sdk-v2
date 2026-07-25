@@ -276,7 +276,7 @@
 		"lcd_owner=rtos\0" \
 		"lcd_mirror_x=1\0" \
 		"lcd_mirror_y=0\0" \
-		"pmic_poweroff=0\0" \
+		"pmic_poweroff=1\0" \
 		"othbootargs=" OTHERBOOTARGS "\0" \
 		PARTS_OFFSET
 

@@ -157,6 +157,7 @@ enum axp20x_variants {
 #define AXP2101_ICC_CFG			0x62
 #define AXP2101_ITERM_CFG		0x63
 #define AXP2101_CHG_V_CFG		0x64
+#define AXP2101_BTN_CHG_CFG		0x6a
 #define AXP2101_BAT_PERCENT		0xa4
 #define AXP2101_PWR_CTRL		0x80
 #define AXP2101_DCDC1_V_OUT		0x82
@@ -180,7 +181,18 @@ enum axp20x_variants {
 #define AXP2101_BAT_PRESENT		BIT(3)
 #define AXP2101_CHG_STAT_MASK		GENMASK(2, 0)
 #define AXP2101_GAUGE_EN		BIT(3)
+#define AXP2101_BTN_CHG_EN		BIT(2)	/* VBackup / RTC button cell */
 #define AXP2101_CHG_EN			BIT(1)
+#define AXP2101_BTN_CHG_CFG_MASK	GENMASK(2, 0)
+/* REG6AH: button-battery charge termination, 2.6V + 100mV * n */
+#define AXP2101_BTN_CHG_2V6		0x0
+#define AXP2101_BTN_CHG_2V7		0x1
+#define AXP2101_BTN_CHG_2V8		0x2
+#define AXP2101_BTN_CHG_2V9		0x3
+#define AXP2101_BTN_CHG_3V0		0x4
+#define AXP2101_BTN_CHG_3V1		0x5
+#define AXP2101_BTN_CHG_3V2		0x6
+#define AXP2101_BTN_CHG_3V3		0x7
 #define AXP2101_ICC_MASK		GENMASK(4, 0)
 #define AXP2101_VBAT_H_MASK		GENMASK(5, 0)
 #define AXP2101_VBUS_H_MASK		GENMASK(5, 0)

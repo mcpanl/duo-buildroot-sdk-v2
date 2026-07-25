@@ -37,7 +37,7 @@
 			linux,code = <28>; /* KEY_ENTER */
 			gpios = <&portb 4 GPIO_ACTIVE_LOW>;
 			debounce-interval = <10>;
-			wakeup-source;
+			/* Not a mem wake source; only PWR_GPIO1 + RTC alarm. */
 		};
 	};
 
@@ -46,8 +46,9 @@
 	 * /dev/input/eventN (not shared with user-button).
 	 * Edge IRQ via porte (dw-apb-gpio, GIC SPI 54) — no polling.
 	 * KEY_WAKEUP(143) avoids colliding with axp2101-pek KEY_POWER.
-	 * True mem (ST_SUSP) wake is still MCU-mediated (RTC alarm);
-	 * wakeup-source here helps freeze / light-sleep paths.
+	 * True mem (ST_SUSP) wake is MCU-mediated (RTC alarm);
+	 * wakeup-source here helps freeze / light-sleep.
+	 * Production mem wake: PWR_GPIO1 (MCU) + RTC alarm only (mask 0x30).
 	 */
 	gpio-keys-rtc {
 		compatible = "gpio-keys";
@@ -150,7 +151,7 @@
 		 */
 		interrupt-parent = <&porta>;
 		interrupts = <14 IRQ_TYPE_EDGE_FALLING>;
-		wakeup-source;
+		/* PEK IRQ is not a mem wake source; button shares PWR_GPIO1. */
 		status = "okay";
 
 		regulators {
@@ -315,7 +316,7 @@
 		bt_wake = <&porte 10 GPIO_ACTIVE_HIGH>;
 		bt_hostwake = <&porte 11 GPIO_ACTIVE_HIGH>;
 		uart_index = <4>;
-		wakeup-source;
+		/* BT host-wake is not a mem wake source (mask stays 0x30). */
 		status = "okay";
 	};
 };

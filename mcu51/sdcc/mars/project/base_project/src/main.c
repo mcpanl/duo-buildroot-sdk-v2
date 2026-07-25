@@ -16,15 +16,17 @@
  *   not a dedicated PWR_WAKEUP/PWR_BUTTON pad. While FSM is ST_SUSP/PRE_SUSP
  *   the MCU polls GPIOE1 and, on press, programs an RTC alarm +
  *   RTC_EN_PWR_WAKEUP[5:4] — the same hardware resume path as Linux rtcwake.
+ *   GPIOE1 is input-only; never drive it (may share AXP2101 PWRON via flywire
+ *   with external 1.8V pull-up).
  *
  * RTC_INFO mailbox (Linux <-> 8051):
  *   RTC_INFO0 (0x0502601c): alive magic 0x8051
  *   RTC_INFO1 (0x05026020): [7:0] LED mode (Linux)
  *                           [31:16] Linux heartbeat (optional status)
- *                           0 = blink 300ms ON / 700ms OFF (default / release)
+ *                           0 = blink 300ms ON / 700ms OFF
  *                           1 = blink 1000ms ON / 1000ms OFF
  *                           2 = constant ON
- *                           3 = constant OFF
+ *                           3 = constant OFF (default / release)
  *   RTC_INFO2 (0x05026024): free-running run_ms (MCU; +phase each timer fire)
  *   RTC_INFO3 (0x05026028): [7:0] applied mode echo
  *                           [31:8] completed blink-loop count
@@ -193,7 +195,6 @@ static void scratch_write(uint32_t seq, uint32_t run_ms, uint32_t loop_count,
 static void rtc_req_resume_via_alarm(void)
 {
 	uint32_t now;
-	uint32_t mask;
 
 	now = mmio_read_32(RTC_SEC_CNTR_VALUE);
 
@@ -204,8 +205,12 @@ static void rtc_req_resume_via_alarm(void)
 	mmio_write_32(RTC_APB_RDATA_SEL, 1);
 	mmio_write_32(RTC_ALARM_ENABLE, 1);
 
-	mask = mmio_read_32(RTC_EN_PWR_WAKEUP) | RTC_ALARM_WAKE_BITS;
-	mmio_write_32(RTC_EN_PWR_WAKEUP, mask);
+	/*
+	 * Mem wake sources for this board: RTC alarm only in hardware
+	 * (PWR_GPIO1 is MCU-polled, then uses this path). Never OR in
+	 * pad/SD/USB bits (legacy 0x173F caused instant resume).
+	 */
+	mmio_write_32(RTC_EN_PWR_WAKEUP, RTC_ALARM_WAKE_BITS);
 
 	(void)mmio_read_32(RTC_SEC_CNTR_VALUE);
 }
@@ -277,24 +282,22 @@ void main(void)
 
 	mmio_write_32(RTC_INFO0, 0x8051);
 	mmio_write_32(RTC_INFO2, 0);
-	write_info3(LED_MODE_BLINK0, 0);
+	write_info3(LED_MODE_OFF, 0);
 
+	/*
+	 * Default LED off: force INFO1 mode=OFF (preserve Linux heartbeat).
+	 * Explicit blink/on still works after Linux writes mode 0/1/2.
+	 */
 	info1 = mmio_read_32(RTC_INFO1);
-	mode = read_mode(info1);
+	info1 = (info1 & ~0xFFUL) | (uint32_t)LED_MODE_OFF;
+	mmio_write_32(RTC_INFO1, info1);
+	mode = LED_MODE_OFF;
 	mode_to_ms(mode, &on_ms, &off_ms);
 	write_info3(mode, 0);
 
 	phase = LED_PHASE_ON;
-	phase_ms = on_ms;
-	if (mode == LED_MODE_ON) {
-		led_apply_level(1);
-		phase_ms = 1000;
-	} else if (mode == LED_MODE_OFF) {
-		led_apply_level(0);
-		phase_ms = 1000;
-	} else {
-		led_apply_level(1);
-	}
+	phase_ms = 1000;
+	led_apply_level(0);
 	scratch_write(++scratch_seq, run_ms, loop_count, mode, phase, phase_ms);
 	timer_arm_ms(phase_ms);
 

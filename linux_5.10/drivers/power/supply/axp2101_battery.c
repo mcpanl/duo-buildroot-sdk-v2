@@ -490,9 +490,21 @@ static int axp2101_battery_probe(struct platform_device *pdev)
 	batt->irq_vinsert = -1;
 	batt->irq_vremove = -1;
 
+	/*
+	 * Enable gauge + cell charger, and VBackup/RTC button-cell charge
+	 * (MODULE_EN btn_chg_en, datasheet default is off after system reset).
+	 */
 	ret = regmap_update_bits(batt->regmap, AXP2101_MODULE_EN,
-				 AXP2101_GAUGE_EN | AXP2101_CHG_EN,
-				 AXP2101_GAUGE_EN | AXP2101_CHG_EN);
+				 AXP2101_GAUGE_EN | AXP2101_BTN_CHG_EN |
+				 AXP2101_CHG_EN,
+				 AXP2101_GAUGE_EN | AXP2101_BTN_CHG_EN |
+				 AXP2101_CHG_EN);
+	if (ret)
+		return ret;
+
+	/* 3.0V termination for the board RTC rechargeable backup cell */
+	ret = regmap_update_bits(batt->regmap, AXP2101_BTN_CHG_CFG,
+				 AXP2101_BTN_CHG_CFG_MASK, AXP2101_BTN_CHG_3V0);
 	if (ret)
 		return ret;
 
@@ -584,6 +596,8 @@ static int axp2101_battery_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, batt);
+	dev_info(&pdev->dev,
+		 "AXP2101 battery ready (RTC/VBackup charge on, term 3.0V)\n");
 	return 0;
 
 err_tz:

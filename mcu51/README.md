@@ -4,8 +4,8 @@
 # Hardware: MCU LED is on GPIOE0 / PWR_GPIO[0] in the RTC power domain
 # (active-high). MCU never touches main-domain GPIOA.
 #
-# Default boot behavior: MCU blinks the LED (mode 0). Linux can override via
-# RTC_INFO mailbox: on / off / blink / release (back to default blink).
+# Default boot behavior: MCU LED is OFF (mode 3). Linux can override via
+# RTC_INFO mailbox: on / off / blink / release (back to default OFF).
 #
 # Boot: mcu51-up probes magic + run_ms progress; if MCU already running (e.g.
 # survived main-power loss on RTC VBAT) it skips firmware reload. Use -F to force.
@@ -20,24 +20,24 @@
 #
 # On target (MCU LED = GPIOE[0] / PWR_GPIO[0]):
 #   # boot: S30mcu51 syncs newer factory FW over stale /mnt/data runtime,
-#   # loads FW (or skips if already alive) and starts default blink
+#   # loads FW (or skips if already alive) and starts with LED OFF
 #   mcu51-up              # skip load if running
 #   mcu51-up -F           # force reload
 #
 # WARNING: mcu51-up prefers /mnt/data/mcu51/mars_mcu_fw.bin over factory.
 # After an image upgrade, S30mcu51 copies factory -> runtime when factory is
 # newer so GPIOE0 firmware is not shadowed by an old A18 blink binary.
-#   mcu51-ledctl mode 0   # blink 300ms ON / 700ms OFF (default / release)
+#   mcu51-ledctl mode 0   # blink 300ms ON / 700ms OFF
 #   mcu51-ledctl mode 1   # blink 1000ms ON / 1000ms OFF
 #   mcu51-ledctl on       # constant ON
-#   mcu51-ledctl off      # constant OFF
+#   mcu51-ledctl off      # constant OFF (default / release)
 #   mcu51-ledctl blink 0  # same as mode 0
-#   mcu51-ledctl release  # restore default blink
+#   mcu51-ledctl release  # restore default OFF
 #   mcu51-ledctl run-ms   # free-running ms since MCU FW start (INFO2)
 #   mcu51-ledctl count    # completed blink loops (INFO3[31:8])
 #   mcu51-ledctl status   # alive / mode / hb / run_ms / count
 #   /etc/init.d/S30mcu51 stop   # stop hb + hold MCU reset (safe)
-#   /etc/init.d/S30mcu51 start  # reload + default blink
+#   /etc/init.d/S30mcu51 start  # reload + default LED OFF
 #
 # Board status LEDs (Zonhor SG2000):
 #   Linux  sys-led  GPIOA29  (gpio-leds, default activity)
@@ -47,10 +47,13 @@
 # Mem wake (Zonhor), active-low (pull-up, press to GND):
 #   GPIOE1 / PWR_GPIO1 — only production path: MCU polls in ST_SUSP and
 #     arms RTC alarm + RTC_EN_PWR_WAKEUP=0x30. Flywire + pull-up required.
+#   Shared with AXP2101 PWRON: external pull-up to VDDIO_RTC 1.8V; MCU must
+#     keep GPIOE1 as input only (never drive).
 #   PWR_WAKEUP0 / PWR_BUTTON1 — reserved, unconnected; U-Boot must NOT mux
 #     them as wake (float + active-low caused instant mem resume). Left as
 #     PWR_GPIO_6/8; mask is 0x30 only (no 0x173F).
-#   DTS gpio-keys wakeup-source alone cannot wake true mem (GIC off).
+#   DTS: only gpio-keys-rtc (PWR_GPIO1) keeps wakeup-source; user-button /
+#     AXP / BT host-wake are not system wake sources. True mem still needs MCU.
 #
 # Debug stop/resume (NEVER write 0 to RST — kills RTC fabric):
 #   busybox devmem 0x05025018 32 0x8107fffd   # hold reset

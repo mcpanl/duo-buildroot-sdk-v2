@@ -7,10 +7,10 @@
  *   mcu51-ledctl count | run-ms | status | hb-once
  *
  * Modes (RTC_INFO1[7:0]):
- *   0 = blink 300/700ms (default / release)
+ *   0 = blink 300/700ms
  *   1 = blink 1000/1000ms
  *   2 = constant ON
- *   3 = constant OFF
+ *   3 = constant OFF (default / release)
  */
 #include "devmem.h"
 
@@ -45,7 +45,7 @@ static void usage(const char *prog)
 		"  %s on            constant ON (mode 2)\n"
 		"  %s off           constant OFF (mode 3)\n"
 		"  %s blink [0|1]   blink mode 0 or 1 (default 0)\n"
-		"  %s release       restore default blink (mode 0)\n"
+		"  %s release       restore default OFF (mode 3)\n"
 		"  %s count         print blink loop count (INFO3[31:8])\n"
 		"  %s run-ms        print free-running run_ms (INFO2)\n"
 		"  %s status        show alive/mode/hb/run_ms/count\n"
@@ -181,7 +181,7 @@ int main(int argc, char *argv[])
 		return cmd_mode(mode);
 	}
 	if (strcmp(argv[1], "release") == 0)
-		return cmd_mode(LED_MODE_BLINK0);
+		return cmd_mode(LED_MODE_OFF);
 	if (strcmp(argv[1], "count") == 0)
 		return cmd_count();
 	if (strcmp(argv[1], "run-ms") == 0)
@@ -192,7 +192,7 @@ int main(int argc, char *argv[])
 		return cmd_hb_once();
 	/* Compatibility alias from older tooling */
 	if (strcmp(argv[1], "release-led") == 0)
-		return cmd_mode(LED_MODE_BLINK0);
+		return cmd_mode(LED_MODE_OFF);
 
 	usage(argv[0]);
 	return 1;

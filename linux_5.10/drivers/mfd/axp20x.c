@@ -940,9 +940,8 @@ static struct axp20x_dev *axp20x_pm_power_off;
 /*
  * Gate AXP2101 soft power-off / hard restart on U-Boot env pmic_poweroff,
  * passed via bootargs as cvi.pmic_poweroff=${pmic_poweroff}.
- * Default is off unless the env is explicitly set to an enable value and
- * saved (fw_setenv / saveenv). When disabled, CVITEK RTC reboot/poweroff
- * remains the system path.
+ * Default env is pmic_poweroff=1 (AXP owns reboot/poweroff). Set to 0 and
+ * saveenv to fall back to CVITEK RTC reboot/poweroff.
  */
 static bool axp2101_pmic_poweroff_enabled(void)
 {
@@ -956,20 +955,21 @@ static bool axp2101_pmic_poweroff_enabled(void)
 		of_node_put(chosen);
 	}
 	if (!bootargs)
-		return false;
+		return true;
 
 	s = strstr(bootargs, "cvi.pmic_poweroff=");
 	if (!s)
-		return false;
+		return true;
 	s += strlen("cvi.pmic_poweroff=");
 
-	/* Accept 1 / y / yes / on (common boolean cmdline forms). */
-	if (*s == '1' || *s == 'y' || *s == 'Y')
-		return true;
-	if (!strncmp(s, "on", 2) || !strncmp(s, "ON", 2))
-		return true;
+	/* Explicit disable: 0 / n / no / off */
+	if (*s == '0' || *s == 'n' || *s == 'N')
+		return false;
+	if (!strncmp(s, "off", 3) || !strncmp(s, "OFF", 3))
+		return false;
 
-	return false;
+	/* Accept 1 / y / yes / on (and any other non-disable value). */
+	return true;
 }
 
 /*
@@ -1223,11 +1223,11 @@ int axp20x_device_probe(struct axp20x_dev *axp20x)
 	}
 
 	/*
-	 * AXP2101 soft power-off / restart (REG10H) is optional and gated by
-	 * U-Boot env pmic_poweroff → cmdline cvi.pmic_poweroff=. Default is
-	 * disabled so CVITEK RTC warm-reset / soft-shutdown stay in charge
-	 * unless the env is explicitly enabled and saved. When enabled,
-	 * claim pm_power_off + syscore_ops so RTC cannot steal the path.
+	 * AXP2101 soft power-off / restart (REG10H) is gated by U-Boot env
+	 * pmic_poweroff → cmdline cvi.pmic_poweroff=. Default is enabled
+	 * (pmic_poweroff=1). Set pmic_poweroff=0 && saveenv to keep CVITEK
+	 * RTC warm-reset / soft-shutdown instead. When enabled, claim
+	 * pm_power_off + syscore_ops so RTC cannot steal the path.
 	 */
 	if (axp20x->variant == AXP2101_ID) {
 		if (axp2101_pmic_poweroff_enabled()) {
@@ -1238,7 +1238,7 @@ int axp20x_device_probe(struct axp20x_dev *axp20x)
 				 "AXP2101 registered for system restart/power-off (cvi.pmic_poweroff enabled)\n");
 		} else {
 			dev_info(axp20x->dev,
-				 "AXP2101 PMIC restart/power-off disabled (set U-Boot pmic_poweroff=1 && saveenv)\n");
+				 "AXP2101 PMIC restart/power-off disabled (cvi.pmic_poweroff=0)\n");
 		}
 	} else if (!pm_power_off) {
 		axp20x_pm_power_off = axp20x;
