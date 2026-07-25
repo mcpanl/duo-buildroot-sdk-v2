@@ -186,9 +186,22 @@ recover_once() {
 			fi
 		fi
 	else
-		# After deep mem, SCANNING/DISCONNECTED usually means SDIO wedged;
-		# skip long reconnect wait and reload immediately.
-		log "not associated ($st), skip reconnect -> reload"
+		# Soft try first: after sdio_reset_comm resume, FW may still be up
+		# and only association was dropped by netif_device_detach/attach.
+		log "not associated ($st), try short reconnect before reload"
+		if command -v wpa_cli >/dev/null 2>&1; then
+			wpa_cli -i "$IFACE" reconnect >>"$LOG" 2>&1 || true
+			i=0
+			while [ "$i" -lt 6 ]; do
+				if [ "$(wpa_state)" = "COMPLETED" ] && renew_dhcp; then
+					log "recover ok: soft reconnect+dhcp"
+					return 0
+				fi
+				sleep 0.5
+				i=$((i + 1))
+			done
+		fi
+		log "soft reconnect failed -> reload"
 	fi
 
 	if reload_aic; then

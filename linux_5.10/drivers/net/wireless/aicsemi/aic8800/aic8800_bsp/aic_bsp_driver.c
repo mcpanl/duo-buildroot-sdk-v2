@@ -1951,6 +1951,18 @@ int aicbsp_driver_fw_init(struct aic_sdio_dev *sdiodev)
 
 int aicbsp_get_feature(struct aicbsp_feature_t *feature, char *fw_path)
 {
+	if (!aicbsp_sdiodev) {
+		/* Seen during mid-rescan probe before bsp binds — avoid Oops */
+		sdio_err("%s: aicbsp_sdiodev NULL\n", __func__);
+		feature->sdio_clock = FEATURE_SDIO_CLOCK_V3;
+		feature->sdio_phase = FEATURE_SDIO_PHASE;
+		feature->hwinfo = aicbsp_info.hwinfo;
+		feature->fwlog_en = aicbsp_info.fwlog_en;
+		feature->irqf = aicbsp_info.irqf;
+		if (fw_path)
+			sprintf(fw_path, "%s", AICBSP_FW_PATH);
+		return -ENODEV;
+	}
 	if (aicbsp_sdiodev->chipid == PRODUCT_ID_AIC8801 ||
         aicbsp_sdiodev->chipid == PRODUCT_ID_AIC8800DC ||
         aicbsp_sdiodev->chipid == PRODUCT_ID_AIC8800DW){

@@ -14,7 +14,7 @@
 |------|------|
 | `echo freeze > /sys/power/state` + 尽快恢复路由器 IP | **可用**。守护进程 resume 后续 DHCP；部分情况下驱动侧关联仍在，可直接判为 healthy。 |
 | `echo mem > /sys/power/state`（deep）SoC 休眠/唤醒 | **可用**。`PM: suspend entry (deep)` → `PM: suspend exit`。 |
-| deep mem 后 WiFi「无感」恢复 | **可用但非固件级零丢联**：resume 后常丢关联，守护进程约 **12s** 内重载 AIC 模组并重新 DHCP。 |
+| deep mem 后 WiFi「无感」恢复 | **可用但非固件级零丢联**：resume 后 SDIO 可 `reset_comm`+reinit；FW 关联仍丢，守护进程 **fdrv-only 重载**约 **5–7s** 内恢复（原先 ~12s）。禁止内核内 `cvi_sdio_rescan`（曾 Oops）。 |
 | `wifi-bt-lpm.sh prepare-mem` 后再 deep mem | **高风险，禁止作为默认路径**。曾出现电流回升但系统卡死，软 RST 无法启动，需断全电。 |
 
 板端快捷自测（建议串口；USB RNDIS 在 suspend 期间会断）：

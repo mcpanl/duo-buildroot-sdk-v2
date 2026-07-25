@@ -27,7 +27,6 @@
 #include <linux/pm_wakeup.h>
 #endif
 #include "rwnx_wakelock.h"
-#include <linux/workqueue.h>
 #include <linux/delay.h>
 
 #ifdef CONFIG_INGENIC_T20
@@ -47,8 +46,6 @@ extern uint8_t scanning;
 #ifdef CONFIG_PLATFORM_CVITEK
 extern int cvi_get_wifi_wakeup_gpio(void);
 extern int cvi_get_wifi_host_wake_gpio(void);
-extern int cvi_get_wifi_pwr_on_gpio(void);
-extern int cvi_sdio_rescan(void);
 #endif
 
 /* Not always declared in headers on this tree; exported by mmc/core/sdio.c */
@@ -818,40 +815,83 @@ void aicwf_sdio_remove_(struct sdio_func *func){
     aicwf_sdio_remove(func);
 }
 
-#ifdef CONFIG_PLATFORM_CVITEK
-static void aicwf_sdio_power_cycle_workfn(struct work_struct *work)
+/*
+ * After sdio_reset_comm the card is re-enumerated at MMC level but the
+ * function enable / FN0 / bytemode state the driver set at probe is gone.
+ * Re-apply the D80 essentials without touching FW (FW still in DRAM if
+ * WLAN_POWER was kept).
+ *
+ * Do NOT call cvi_sdio_rescan from here while fdrv/bsp stay loaded — that
+ * remove/reprobe path Oopses in aicbsp_get_feature when aicbsp_sdiodev is
+ * NULL. Leave hard recovery to userspace module reload.
+ */
+static int aicwf_sdio_reinit_func_after_reset(struct aic_sdio_dev *sdiodev)
 {
-	int gpio = cvi_get_wifi_pwr_on_gpio();
-	int ret;
+	int ret = 0;
+	u8 val1 = 0;
+	u8 byte_mode_disable = 0x1;
 
-	if (gpio <= 0) {
-		sdio_err("%s: no WLAN_POWER gpio\n", __func__);
-		return;
+	if (!sdiodev || !sdiodev->func)
+		return -ENODEV;
+
+	sdio_claim_host(sdiodev->func);
+	sdiodev->func->card->quirks |= MMC_QUIRK_LENIENT_FN0;
+
+	ret = sdio_set_block_size(sdiodev->func, SDIOWIFI_FUNC_BLOCKSIZE);
+	if (ret < 0) {
+		sdio_err("%s: set blocksize fail %d\n", __func__, ret);
+		sdio_release_host(sdiodev->func);
+		return ret;
 	}
 
-	/*
-	 * GPIO may already be requested by aicbsp as WLAN_POWER. Prefer
-	 * gpio_set_value; fall back to direction_output if needed.
-	 */
-	sdio_err("%s: WLAN power-cycle + cvi_sdio_rescan (resume recover)\n",
-		 __func__);
-	gpio_set_value(gpio, 0);
-	msleep(200);
-	gpio_set_value(gpio, 1);
-	msleep(80);
-	ret = cvi_sdio_rescan();
-	if (ret)
-		sdio_err("%s: cvi_sdio_rescan failed %d\n", __func__, ret);
-}
+	/* enable_func is idempotent if already enabled; ignore -EINVAL */
+	ret = sdio_enable_func(sdiodev->func);
+	if (ret < 0 && ret != -EINVAL) {
+		sdio_err("%s: enable func fail %d\n", __func__, ret);
+		sdio_release_host(sdiodev->func);
+		return ret;
+	}
+	ret = 0;
 
-static DECLARE_WORK(aicwf_sdio_power_cycle_work, aicwf_sdio_power_cycle_workfn);
+	if (sdiodev->chipid == PRODUCT_ID_AIC8800D80) {
+		sdio_f0_writeb(sdiodev->func, 0x7F, 0xF2, &ret);
+		if (ret) {
+			sdio_err("%s: set fn0 0xF2 fail %d\n", __func__, ret);
+			sdio_release_host(sdiodev->func);
+			return ret;
+		}
+	}
+	sdio_release_host(sdiodev->func);
 
-static void aicwf_sdio_schedule_power_cycle(void)
-{
-	if (!schedule_work(&aicwf_sdio_power_cycle_work))
-		sdio_dbg("%s: power-cycle work already queued\n", __func__);
+	ret = aicwf_sdio_writeb(sdiodev, sdiodev->sdio_reg.bytemode_enable_reg,
+				byte_mode_disable);
+	if (ret < 0) {
+		sdio_err("%s: bytemode write fail %d\n", __func__, ret);
+		return ret;
+	}
+
+	if (sdiodev->chipid == PRODUCT_ID_AIC8800D80) {
+		ret = aicwf_sdio_writeb(sdiodev, sdiodev->sdio_reg.wakeup_reg, 0x11);
+		if (ret < 0) {
+			sdio_err("%s: wakeup_reg write fail %d\n", __func__, ret);
+			return ret;
+		}
+		mdelay(5);
+		ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.sleep_reg, &val1);
+		if (ret < 0) {
+			sdio_err("%s: sleep_reg read fail %d\n", __func__, ret);
+			return ret;
+		}
+		if (!(val1 & 0x10)) {
+			sdio_err("%s: chip not awake after reinit (sleep=0x%x)\n",
+				 __func__, val1);
+			return -EIO;
+		}
+		sdio_dbg("%s: sdio ready after reinit\n", __func__);
+	}
+
+	return 0;
 }
-#endif
 
 static int aicwf_sdio_bus_probe_alive(struct aic_sdio_dev *sdiodev)
 {
@@ -945,14 +985,15 @@ static int aicwf_sdio_resume(struct device *dev)
 	}
 
 	/*
-	 * After deep (mem) suspend the AIC8800 often ignores SDIO wakeup_reg
-	 * writes until HOST_WAKE_WF is asserted. Do GPIO wake first, re-init
-	 * SDIO signaling (host clock was cut despite KEEP_POWER), then bring
-	 * the link ACTIVE and clear FW LP level.
+	 * Deep mem: SDHCI clock was cut despite KEEP_POWER. Sequence:
+	 *   HOST_WAKE -> sdio_reset_comm -> re-enable func/regs ->
+	 *   keep ACTIVE (do NOT force SLEEP/wakeup_reg storm) -> clear FW LP.
+	 * Hard recover (WLAN power + rescan) must be userspace rmmod/insmod;
+	 * in-kernel rescan while modules stay loaded Oopses aicbsp.
 	 */
 #ifdef CONFIG_GPIO_WAKEUP
 	rwnx_wifi_host_wake_set(1);
-	msleep(10);
+	msleep(20);
 #endif
 
 	atomic_set(&sdiodev->is_bus_suspend, 0);
@@ -961,18 +1002,18 @@ static int aicwf_sdio_resume(struct device *dev)
 		ret = sdio_reset_comm(sdiodev->func->card);
 		if (ret)
 			sdio_err("%s: sdio_reset_comm failed %d\n", __func__, ret);
+		else {
+			ret = aicwf_sdio_reinit_func_after_reset(sdiodev);
+			if (ret)
+				sdio_err("%s: reinit_func failed %d\n", __func__, ret);
+		}
 	}
 
 #if defined(CONFIG_SDIO_PWRCTRL)
-	/*
-	 * We left ACTIVE across suspend so pwr_stctl would no-op. Force the
-	 * wakeup_reg path once to validate the bus after reset_comm.
-	 */
-	sdiodev->state = SDIO_SLEEP_ST;
-	aicwf_sdio_pwr_stctl(sdiodev, SDIO_ACTIVE_ST);
+	/* Stay ACTIVE — forcing SLEEP just produces wakeup_reg fail storms */
+	sdiodev->state = SDIO_ACTIVE_ST;
+	aicwf_sdio_pwrctl_timer(sdiodev, sdiodev->active_duration);
 #endif
-
-//	aicwf_sdio_hal_irqhandler(sdiodev->func);
 
 #if defined(CONFIG_PLATFORM_ROCKCHIP) || defined(CONFIG_PLATFORM_ROCKCHIP2)
 	if(sdiodev->chipid == PRODUCT_ID_AIC8801){
@@ -988,28 +1029,36 @@ static int aicwf_sdio_resume(struct device *dev)
 	}
 #endif
 #ifdef CONFIG_WIFI_SUSPEND_FOR_LINUX
-	ret = rwnx_set_wifi_suspend('0');
-	if (ret) {
-		sdio_err("%s: clear FW LP failed %d, retry after settle\n",
-			 __func__, ret);
-		msleep(50);
-		if (sdiodev->func && sdiodev->func->card)
-			sdio_reset_comm(sdiodev->func->card);
-#if defined(CONFIG_SDIO_PWRCTRL)
-		sdiodev->state = SDIO_SLEEP_ST;
-		aicwf_sdio_pwr_stctl(sdiodev, SDIO_ACTIVE_ST);
-#endif
-		ret = rwnx_set_wifi_suspend('0');
+	/*
+	 * Only clear FW LP if we entered wifi_suspend via proc/prepare-mem.
+	 * Bare deep mem keeps ACTIVE and calling me_set_lp_level(0) just burns
+	 * ~3s on cmd timeout and poisons the cmd queue (queue crashed).
+	 */
+	if (wifi_suspend_active) {
+		int fw_ret = rwnx_set_wifi_suspend('0');
+		if (fw_ret) {
+			sdio_err("%s: clear FW LP failed %d, retry\n",
+				 __func__, fw_ret);
+			msleep(50);
+			if (sdiodev->func && sdiodev->func->card) {
+				sdio_reset_comm(sdiodev->func->card);
+				aicwf_sdio_reinit_func_after_reset(sdiodev);
+			}
+			fw_ret = rwnx_set_wifi_suspend('0');
+		}
+		if (fw_ret)
+			ret = fw_ret;
+	} else {
+		sdio_dbg("%s: skip LP clear (wifi_suspend_active=0)\n", __func__);
 	}
 #endif
 
 	bus_ok = aicwf_sdio_bus_probe_alive(sdiodev);
 	if (bus_ok || ret) {
-		sdio_err("%s: bus/FW still bad (bus=%d fw=%d)\n",
+		sdio_err("%s: bus/FW still bad (bus=%d fw=%d) — userspace reload needed\n",
 			 __func__, bus_ok, ret);
-#ifdef CONFIG_PLATFORM_CVITEK
-		aicwf_sdio_schedule_power_cycle();
-#endif
+	} else {
+		sdio_dbg("%s: SDIO bus ok after resume\n", __func__);
 	}
 
 	sdio_dbg("%s exit\n", __func__);

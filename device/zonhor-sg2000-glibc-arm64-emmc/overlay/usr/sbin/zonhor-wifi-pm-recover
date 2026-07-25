@@ -186,8 +186,8 @@ recover_once() {
 			fi
 		fi
 	else
-		# After deep mem, SCANNING/DISCONNECTED usually means SDIO wedged;
-		# skip long reconnect wait and reload immediately.
+		# After deep mem, SCANNING means FW stack is dead even if SDIO
+		# byte path was reinit'd — soft reconnect just wastes ~4s.
 		log "not associated ($st), skip reconnect -> reload"
 	fi
 
