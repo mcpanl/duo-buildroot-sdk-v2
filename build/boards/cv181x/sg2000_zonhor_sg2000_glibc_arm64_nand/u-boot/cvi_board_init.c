@@ -81,9 +81,18 @@ int cvi_board_init(void)
 	/* Camera1 disabled; keep its sideband pads as fixed GPIO outputs. */
 	zonhor_config_cam_gpio_fixed();
 
-	/* User/Sys LEDs */
-	PINMUX_CONFIG(JTAG_CPU_TCK, XGPIOA_18); /* USER_LED */
-	PINMUX_CONFIG(IIC0_SDA, XGPIOA_29);     /* SYS_LED */
+	/* User / Sys LEDs + RTC-domain MCU LED / wake */
+	PINMUX_CONFIG(JTAG_CPU_TCK, XGPIOA_18); /* RTOS status LED */
+	PINMUX_CONFIG(IIC0_SDA, XGPIOA_29);     /* Linux SYS_LED */
+	PINMUX_CONFIG(PWR_GPIO0, PWR_GPIO_0);   /* MCU status LED */
+	PINMUX_CONFIG(PWR_GPIO1, PWR_GPIO_1);   /* RTC mem wake input */
+	/*
+	 * RTC_IOCTRL unlock (always-on 1.8V). TOP pinmux (0x030010a4/a8) is
+	 * lost with VDD_SYS; pad buffer unlock lives at RTC_IO and must match
+	 * CV181x FMUX offsets: PWR_GPIO0=+0xa4, PWR_GPIO1=+0xa8.
+	 */
+	mmio_write_32(0x050270a4, 0x11); /* unlock PWR_GPIO0 */
+	mmio_write_32(0x050270a8, 0x11); /* unlock PWR_GPIO1 */
 
 	/* USER_BUTTON and PMIC IRQ */
 	PINMUX_CONFIG(USB_ID, XGPIOB_4);        /* USER_BUTTON */
@@ -145,9 +154,22 @@ int cvi_board_init(void)
 	PINMUX_CONFIG(UART2_CTS, UART4_CTS);
 	PINMUX_CONFIG(UART2_RTS, UART4_RTS);
 
-	/* EPHY LEDs */
-	PINMUX_CONFIG(PWR_WAKEUP0, EPHY_LNK_LED);
-	PINMUX_CONFIG(PWR_BUTTON1, EPHY_SPD_LED);
+	/*
+	 * Mem wake on this board: only GPIOE1 / PWR_GPIO1 (MCU-polled in
+	 * ST_SUSP, then arms RTC alarm + bits[5:4]). Flywire + pull-up done.
+	 *
+	 * Do NOT enable PWR_WAKEUP0 / PWR_BUTTON1 as RTC FSM wake — pads are
+	 * reserved/unconnected; active-low + float = instant resume (0x3F).
+	 * Leave them as ordinary PWR_GPIO, not wake functions.
+	 */
+	PINMUX_CONFIG(PWR_WAKEUP0, PWR_GPIO_6);
+	PINMUX_CONFIG(PWR_BUTTON1, PWR_GPIO_8);
+	/*
+	 * RTC_EN_PWR_WAKEUP @ 0x050260BC: 0x30 = RTC alarm only (Linux
+	 * wakealarm + MCU GPIOE1 path). No pad-wake / SD-USB bits (was 0x173F).
+	 */
+	mmio_write_32(0x050260BC, 0x30);
+	mmio_write_32(0x05026128, 0x0);
 
 	set_rtc_register_for_power();
 

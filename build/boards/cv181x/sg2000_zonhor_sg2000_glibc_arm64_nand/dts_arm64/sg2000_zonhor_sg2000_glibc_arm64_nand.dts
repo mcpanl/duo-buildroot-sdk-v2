@@ -10,16 +10,22 @@
 	leds {
 		compatible = "gpio-leds";
 
+		/*
+		 * Linux sys-led stays on GPIOA29.
+		 * GPIOA18: RTOS blinks early, then hands off once Linux is up
+		 * (GPIOA bank RMW races). Linux owns it via rtos-led after that.
+		 * GPIOE0 (PWR_GPIO0): RTC 8051 MCU exclusive.
+		 */
 		sys-led {
 			label = "sys-led";
 			gpios = <&porta 29 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "activity";
 		};
 
-		user-led {
-			label = "user-led";
+		rtos-led {
+			label = "rtos-led";
 			gpios = <&porta 18 GPIO_ACTIVE_HIGH>;
-			default-state = "off";
+			linux,default-trigger = "timer";
 		};
 	};
 
@@ -30,6 +36,26 @@
 			label = "user-button";
 			linux,code = <28>; /* KEY_ENTER */
 			gpios = <&portb 4 GPIO_ACTIVE_LOW>;
+			debounce-interval = <10>;
+			wakeup-source;
+		};
+	};
+
+	/*
+	 * Separate gpio-keys node so GPIOE1 / PWR_GPIO1 gets its own
+	 * /dev/input/eventN (not shared with user-button).
+	 * Edge IRQ via porte (dw-apb-gpio, GIC SPI 54) — no polling.
+	 * KEY_WAKEUP(143) avoids colliding with axp2101-pek KEY_POWER.
+	 * True mem (ST_SUSP) wake is still MCU-mediated (RTC alarm);
+	 * wakeup-source here helps freeze / light-sleep paths.
+	 */
+	gpio-keys-rtc {
+		compatible = "gpio-keys";
+
+		rtc-wakeup-button {
+			label = "rtc-wakeup-button";
+			linux,code = <143>; /* KEY_WAKEUP */
+			gpios = <&porte 1 GPIO_ACTIVE_LOW>;
 			debounce-interval = <10>;
 			wakeup-source;
 		};
