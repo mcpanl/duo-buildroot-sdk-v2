@@ -835,20 +835,19 @@ static int aicwf_sdio_suspend(struct device *dev)
 		return ret;
 	}
 
-
-	while (sdiodev->state == SDIO_ACTIVE_ST) {
-		if (down_interruptible(&sdiodev->tx_priv->txctl_sema))
-			continue;
-        #if defined(CONFIG_SDIO_PWRCTRL)
-		aicwf_sdio_pwr_stctl(sdiodev, SDIO_SLEEP_ST);
-        #endif
-		up(&sdiodev->tx_priv->txctl_sema);
-		break;
-	}
-#ifdef CONFIG_GPIO_WAKEUP
-//	rwnx_enable_hostwake_irq();
+	/*
+	 * Idle pwrctl may already be in SDIO_SLEEP_ST. Wake and stop the idle
+	 * timer before deep mem — sleeping firmware + host clock cut makes
+	 * post-resume wakeup_reg writes fail on AIC8800D80.
+	 * Do NOT force SDIO_SLEEP_ST for system suspend.
+	 */
+#if defined(CONFIG_SDIO_PWRCTRL)
+	aicwf_sdio_pwr_stctl(sdiodev, SDIO_ACTIVE_ST);
+	aicwf_sdio_pwrctl_timer(sdiodev, 0);
 #endif
-
+#ifdef CONFIG_GPIO_WAKEUP
+	rwnx_wifi_host_wake_set(1);
+#endif
 
 #if defined(CONFIG_PLATFORM_ROCKCHIP) || defined(CONFIG_PLATFORM_ROCKCHIP2)
 	if(sdiodev->chipid == PRODUCT_ID_AIC8801){
@@ -890,9 +889,21 @@ static int aicwf_sdio_resume(struct device *dev)
 			netif_device_attach(rwnx_vif->ndev);
 	}
 
-	#if defined(CONFIG_SDIO_PWRCTRL)
+	/*
+	 * After deep (mem) suspend the AIC8800 often ignores SDIO wakeup_reg
+	 * writes until HOST_WAKE_WF is asserted. Do GPIO wake first, then
+	 * bring the SDIO link ACTIVE, then clear FW LP level.
+	 */
+#ifdef CONFIG_GPIO_WAKEUP
+	rwnx_wifi_host_wake_set(1);
+	msleep(10);
+#endif
+
+	atomic_set(&sdiodev->is_bus_suspend, 0);
+
+#if defined(CONFIG_SDIO_PWRCTRL)
 	aicwf_sdio_pwr_stctl(sdiodev, SDIO_ACTIVE_ST);
-	#endif
+#endif
 
 //	aicwf_sdio_hal_irqhandler(sdiodev->func);
 
@@ -909,12 +920,9 @@ static int aicwf_sdio_resume(struct device *dev)
 		sdio_release_host(sdiodev->func);
 	}
 #endif
-    atomic_set(&sdiodev->is_bus_suspend, 0);
-//    smp_mb();
-	#ifdef CONFIG_WIFI_SUSPEND_FOR_LINUX
+#ifdef CONFIG_WIFI_SUSPEND_FOR_LINUX
 	rwnx_set_wifi_suspend('0');
-	#endif//CONFIG_WIFI_SUSPEND_FOR_LINUX
-
+#endif
 
 	sdio_dbg("%s exit\n", __func__);
 	return 0;
@@ -1063,6 +1071,11 @@ int aicwf_sdio_wakeup(struct aic_sdio_dev *sdiodev)
 		AICWFDBG(LOGSDPWRC, "%s w\n", __func__);
 
 		//rwnx_pm_stay_awake(sdiodev);
+#ifdef CONFIG_GPIO_WAKEUP
+		/* Ensure HOST_WAKE_WF is high before touching wakeup_reg */
+		rwnx_wifi_host_wake_set(1);
+		msleep(5);
+#endif
 
 		while (write_retry) {
 			ret = aicwf_sdio_writeb(sdiodev, sdiodev->sdio_reg.wakeup_reg, wakeup_reg_val);
@@ -2137,9 +2150,19 @@ void aicwf_sdio_hal_irqhandler(struct sdio_func *func)
     if (sdiodev->chipid == PRODUCT_ID_AIC8801 || sdiodev->chipid == PRODUCT_ID_AIC8800DC ||
         sdiodev->chipid == PRODUCT_ID_AIC8800DW) {
     	ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.block_cnt_reg, &intstatus);
-    	while (ret || (intstatus & SDIO_OTHER_INTERRUPT)) {
-    		sdio_err("ret=%d, intstatus=%x\r\n", ret, intstatus);
-    		ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.block_cnt_reg, &intstatus);
+    	{
+    		int retry = 0;
+
+    		while (ret || (intstatus & SDIO_OTHER_INTERRUPT)) {
+    			if (++retry > 32) {
+    				sdio_err("intstatus read abort after %d retries (ret=%d, intstatus=%x)\r\n",
+    					 retry, ret, intstatus);
+    				rwnx_wakeup_unlock(sdiodev->rwnx_hw->ws_irqrx);
+    				return;
+    			}
+    			sdio_err("ret=%d, intstatus=%x\r\n", ret, intstatus);
+    			ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.block_cnt_reg, &intstatus);
+    		}
     	}
     	sdiodev->rx_priv->data_len = intstatus * SDIOWIFI_FUNC_BLOCKSIZE;
 
@@ -2165,13 +2188,22 @@ void aicwf_sdio_hal_irqhandler(struct sdio_func *func)
         }
 
     }else if (sdiodev->chipid == PRODUCT_ID_AIC8800D80) {
-        do {
-            ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.misc_int_status_reg, &intstatus);
-            if (!ret) {
-                break;
+        {
+            int retry = 0;
+
+            do {
+                ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.misc_int_status_reg, &intstatus);
+                if (!ret)
+                    break;
+                sdio_err("ret=%d, intstatus=%x\r\n", ret, intstatus);
+            } while (++retry <= 32);
+
+            if (ret) {
+                sdio_err("misc_int_status read abort after %d retries\r\n", retry);
+                rwnx_wakeup_unlock(sdiodev->rwnx_hw->ws_irqrx);
+                return;
             }
-            sdio_err("ret=%d, intstatus=%x\r\n",ret, intstatus);
-        } while (1);
+        }
         if (intstatus & SDIO_OTHER_INTERRUPT) {
             u8 int_pending;
             ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.sleep_reg, &int_pending);
@@ -2647,9 +2679,10 @@ void rwnx_set_wifi_suspend(char onoff){
 	if (onoff == '0') {
 		printk("%s resume\n", __func__);
 		rwnx_wifi_host_wake_set(1);
-		msleep(2);
-		rwnx_send_me_set_lp_level(sdiodev->rwnx_hw, 0);
+		/* Deep mem resume needs more settle time before SDIO/FW cmds */
+		msleep(20);
 		aicwf_sdio_pwr_stctl(sdiodev, SDIO_ACTIVE_ST);
+		rwnx_send_me_set_lp_level(sdiodev->rwnx_hw, 0);
 		wifi_suspend_active = 0;
 	} else {
 		printk("%s suspend\n", __func__);

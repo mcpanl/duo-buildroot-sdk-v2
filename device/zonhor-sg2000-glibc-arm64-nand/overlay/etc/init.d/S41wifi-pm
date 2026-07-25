@@ -1,0 +1,57 @@
+#!/bin/sh
+#
+# Start post-suspend WiFi recovery watcher.
+#
+
+DAEMON=/usr/sbin/zonhor-wifi-pm-recover
+PIDFILE=/run/zonhor-wifi-pm-recover.pid
+
+case "$1" in
+start)
+	printf "Starting zonhor-wifi-pm-recover: "
+	if [ ! -x "$DAEMON" ]; then
+		echo "SKIP"
+		exit 0
+	fi
+	mkdir -p /var/log /run
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+		# Confirm it is really our daemon
+		if grep -q zonhor-wifi-pm-recover "/proc/$(cat "$PIDFILE")/cmdline" 2>/dev/null || \
+		   tr '\0' ' ' <"/proc/$(cat "$PIDFILE")/cmdline" 2>/dev/null | grep -q zonhor-wifi-pm; then
+			echo "already OK"
+			exit 0
+		fi
+	fi
+	rm -f "$PIDFILE"
+	"$DAEMON" daemon >>/var/log/zonhor-wifi-pm.log 2>&1 &
+	# Wait until daemon_loop rewrites PIDFILE with its real pid
+	i=0
+	while [ "$i" -lt 20 ]; do
+		if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+			echo OK
+			exit 0
+		fi
+		sleep 0.1
+		i=$((i + 1))
+	done
+	echo FAIL
+	;;
+stop)
+	printf "Stopping zonhor-wifi-pm-recover: "
+	"$DAEMON" stop >/dev/null 2>&1 || true
+	if [ -f "$PIDFILE" ]; then
+		kill "$(cat "$PIDFILE")" 2>/dev/null || true
+		rm -f "$PIDFILE"
+	fi
+	echo OK
+	;;
+restart|reload)
+	"$0" stop
+	"$0" start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac
+
+exit $?

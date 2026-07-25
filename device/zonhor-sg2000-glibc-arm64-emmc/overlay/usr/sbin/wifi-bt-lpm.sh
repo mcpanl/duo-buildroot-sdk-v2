@@ -1,0 +1,1 @@
+/mnt/system/wifi-bt-lpm.sh

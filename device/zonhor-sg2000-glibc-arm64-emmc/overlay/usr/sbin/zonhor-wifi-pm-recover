@@ -1,0 +1,218 @@
+#!/bin/sh
+#
+# Post-suspend WiFi recovery for zonhor SG2000 + AIC8800.
+# Watches /sys/power/suspend_stats/success and restores association / DHCP
+# after freeze or deep mem. Falls back to module reload if SDIO stays dead.
+#
+# Usage:
+#   zonhor-wifi-pm-recover          # foreground daemon
+#   zonhor-wifi-pm-recover once     # single recover pass
+#   zonhor-wifi-pm-recover status
+#
+
+IFACE="${ZONHOR_WLAN_IFACE:-wlan0}"
+WPA_CONF="${ZONHOR_WPA_CONF:-/etc/wpa_supplicant.conf}"
+KO_DIR="${ZONHOR_KO_DIR:-/mnt/system/ko}"
+LOG="${ZONHOR_WIFI_PM_LOG:-/var/log/zonhor-wifi-pm.log}"
+STATS_SUCCESS=/sys/power/suspend_stats/success
+PIDFILE=/run/zonhor-wifi-pm-recover.pid
+
+mkdir -p /var/log /run 2>/dev/null || true
+
+log() {
+	ts=$(date '+%F %T' 2>/dev/null || echo boot)
+	echo "$ts $*" | tee -a "$LOG" >/dev/null
+	echo "zonhor-wifi-pm: $*"
+}
+
+have_ipv4() {
+	ip -4 -o addr show dev "$IFACE" 2>/dev/null |
+		awk '/inet / {
+			split($4,a,"/")
+			if (a[1] !~ /^169\.254\./ && a[1] !~ /^0\./) { print a[1]; exit 0 }
+		}' | grep -q .
+}
+
+wpa_state() {
+	wpa_cli -i "$IFACE" status 2>/dev/null |
+		awk -F= '/^wpa_state=/ {print $2; exit}'
+}
+
+wifi_ok() {
+	st=$(wpa_state)
+	[ "$st" = "COMPLETED" ] || return 1
+	have_ipv4 || return 1
+	# Stale IP while not associated must not count as healthy
+	return 0
+}
+
+ensure_wpa() {
+	if ! pidof wpa_supplicant >/dev/null 2>&1; then
+		[ -f "$WPA_CONF" ] || return 1
+		ip link set "$IFACE" up 2>/dev/null || true
+		wpa_supplicant -B -i "$IFACE" -c "$WPA_CONF" >>"$LOG" 2>&1 || return 1
+		sleep 1
+	fi
+	return 0
+}
+
+renew_dhcp() {
+	killall udhcpc 2>/dev/null || true
+	ip -4 addr flush dev "$IFACE" 2>/dev/null || true
+	udhcpc -i "$IFACE" -n -q -t 6 >>"$LOG" 2>&1 || return 1
+	have_ipv4
+}
+
+reload_aic() {
+	log "reload AIC8800 modules"
+	killall wpa_supplicant udhcpc 2>/dev/null || true
+	ip link set "$IFACE" down 2>/dev/null || true
+	rmmod aic8800_btlpm 2>/dev/null || true
+	rmmod aic8800_fdrv 2>/dev/null || true
+	rmmod aic8800_bsp 2>/dev/null || true
+	sleep 1
+	insmod "$KO_DIR/aic8800_bsp.ko" || return 1
+	sleep 1
+	insmod "$KO_DIR/aic8800_fdrv.ko" || return 1
+	sleep 1
+	insmod "$KO_DIR/aic8800_btlpm.ko" 2>/dev/null || true
+	sleep 2
+	if [ -x /usr/sbin/zonhor-mac-from-uid ]; then
+		/usr/sbin/zonhor-mac-from-uid "$IFACE" >>"$LOG" 2>&1 || true
+	fi
+	ip link set "$IFACE" up 2>/dev/null || true
+	wpa_supplicant -B -i "$IFACE" -c "$WPA_CONF" >>"$LOG" 2>&1 || return 1
+	i=0
+	while [ "$i" -lt 25 ]; do
+		st=$(wpa_state)
+		[ "$st" = "COMPLETED" ] && break
+		sleep 1
+		i=$((i + 1))
+	done
+	renew_dhcp
+}
+
+recover_once() {
+	log "recover start (iface=$IFACE)"
+	if ! ip link show "$IFACE" >/dev/null 2>&1; then
+		log "no $IFACE, try module reload"
+		if reload_aic; then
+			log "recover ok after reload (no iface)"
+			return 0
+		fi
+		log "recover failed: no iface"
+		return 1
+	fi
+
+	ensure_wpa || true
+	st=$(wpa_state)
+	log "wpa_state=${st:-none} ipv4=$(have_ipv4 && echo yes || echo no)"
+
+	if wifi_ok; then
+		log "already healthy"
+		return 0
+	fi
+
+	# Soft path only when still associated (typical freeze: DHCP lost)
+	if [ "$st" = "COMPLETED" ]; then
+		if renew_dhcp; then
+			log "recover ok: dhcp renew"
+			return 0
+		fi
+		log "dhcp renew failed while COMPLETED, try reconnect"
+		if command -v wpa_cli >/dev/null 2>&1; then
+			wpa_cli -i "$IFACE" reconnect >>"$LOG" 2>&1 || true
+			sleep 4
+			if [ "$(wpa_state)" = "COMPLETED" ] && renew_dhcp; then
+				log "recover ok: reconnect+dhcp"
+				return 0
+			fi
+		fi
+	else
+		# After deep mem, SCANNING/DISCONNECTED usually means SDIO wedged;
+		# skip long reconnect wait and reload immediately.
+		log "not associated ($st), skip reconnect -> reload"
+	fi
+
+	if reload_aic; then
+		log "recover ok: module reload"
+		return 0
+	fi
+	log "recover failed"
+	return 1
+}
+
+read_success() {
+	if [ -r "$STATS_SUCCESS" ]; then
+		cat "$STATS_SUCCESS" 2>/dev/null || echo 0
+	else
+		echo 0
+	fi
+}
+
+daemon_loop() {
+	echo $$ >"$PIDFILE"
+	prev=$(read_success)
+	log "daemon start pid=$$ suspend_success=$prev"
+	while true; do
+		cur=$(read_success)
+		case "$cur" in
+		*[!0-9]*|"") cur=$prev ;;
+		esac
+		if [ "$cur" -gt "$prev" ] 2>/dev/null; then
+			log "detected resume (success $prev -> $cur)"
+			prev=$cur
+			sleep 3
+			recover_once || true
+			# Second chance if still unhealthy (SDIO settle)
+			if ! wifi_ok; then
+				log "still unhealthy, retry recover"
+				sleep 2
+				recover_once || true
+			fi
+		fi
+		sleep 1
+	done
+}
+
+cmd_status() {
+	echo "pidfile: $PIDFILE"
+	if [ -f "$PIDFILE" ]; then
+		echo "pid: $(cat "$PIDFILE")"
+		kill -0 "$(cat "$PIDFILE")" 2>/dev/null && echo "running: yes" || echo "running: no"
+	else
+		echo "pid: (none)"
+	fi
+	echo "suspend_success: $(read_success)"
+	echo "iface: $IFACE"
+	ip link show "$IFACE" 2>/dev/null || echo "no $IFACE"
+	wpa_cli -i "$IFACE" status 2>/dev/null | grep -E 'wpa_state|ip_address|ssid' || true
+	wifi_ok && echo "wifi: ok" || echo "wifi: need-recover"
+	[ -f "$LOG" ] && echo "---- log tail ----" && tail -20 "$LOG"
+}
+
+case "${1:-daemon}" in
+once) recover_once ;;
+status) cmd_status ;;
+stop)
+	if [ -f "$PIDFILE" ]; then
+		kill "$(cat "$PIDFILE")" 2>/dev/null || true
+		rm -f "$PIDFILE"
+	fi
+	;;
+daemon|start|"")
+	if [ -f "$PIDFILE" ]; then
+		old=$(cat "$PIDFILE")
+		# Ignore stale pidfile and the race where the launcher wrote our own pid
+		if [ -n "$old" ] && [ "$old" != "$$" ] && kill -0 "$old" 2>/dev/null; then
+			echo "already running pid=$old"
+			exit 0
+		fi
+	fi
+	daemon_loop
+	;;
+*)
+	echo "Usage: $0 [daemon|once|status|stop]"
+	exit 1
+	;;
+esac

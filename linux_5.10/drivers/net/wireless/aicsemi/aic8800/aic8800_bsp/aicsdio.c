@@ -1504,13 +1504,21 @@ void aicwf_sdio_hal_irqhandler(struct sdio_func *func)
     	    ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.block_cnt_reg, &intstatus);
     	}
     }else if (sdiodev->chipid  == PRODUCT_ID_AIC8800D80) {
-        do {
-            ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.misc_int_status_reg, &intstatus);
-            if (!ret) {
-                break;
+        {
+            int retry = 0;
+
+            do {
+                ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.misc_int_status_reg, &intstatus);
+                if (!ret)
+                    break;
+                sdio_err("ret=%d, intstatus=%x\r\n", ret, intstatus);
+            } while (++retry <= 32);
+
+            if (ret) {
+                sdio_err("misc_int_status read abort after %d retries\r\n", retry);
+                return;
             }
-            sdio_err("ret=%d, intstatus=%x\r\n",ret, intstatus);
-        } while (1);
+        }
         if (intstatus & SDIO_OTHER_INTERRUPT) {
             u8 int_pending;
             ret = aicwf_sdio_readb(sdiodev, sdiodev->sdio_reg.sleep_reg, &int_pending);
