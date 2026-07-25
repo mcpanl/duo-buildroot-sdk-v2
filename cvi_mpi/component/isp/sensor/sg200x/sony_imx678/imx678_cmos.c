@@ -153,11 +153,15 @@ static CVI_S32 cmos_fps_set(VI_PIPE ViPipe, CVI_FLOAT f32Fps, AE_SENSOR_DEFAULT_
 	pstAeSnsDft->u32FullLinesStd = u32Vts;
 	pstAeSnsDft->u32MaxIntTime = u32Vts - 1;
 	pstAeSnsDft->u32FullLines = u32Vts;
+	pstAeSnsDft->f32Fps = f32Fps;
 
 	pstSnsRegsInfo = &pstSnsState->astSyncInfo[0].snsCfg;
 	pstSnsRegsInfo->astI2cData[LINEAR_VMAX_0].u32Data = u32Vts & 0xff;
 	pstSnsRegsInfo->astI2cData[LINEAR_VMAX_1].u32Data = (u32Vts >> 8) & 0xff;
 	pstSnsRegsInfo->astI2cData[LINEAR_VMAX_2].u32Data = (u32Vts >> 16) & 0x0f;
+
+	syslog(LOG_WARNING, "imx678: fps=%.2f VMAX=%u (def=%u@%.0f)\n",
+	       f32Fps, u32Vts, pstMode->u32VtsDef, pstMode->f32MaxFps);
 
 	return CVI_SUCCESS;
 }

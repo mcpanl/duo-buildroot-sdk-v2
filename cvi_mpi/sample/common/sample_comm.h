@@ -199,6 +199,7 @@ typedef struct _SAMPLE_SENSOR_INFO_S {
 	CVI_U8 u8MuxDev;
 	CVI_S16 s16SwitchGpio;
 	CVI_U8 u8SwitchPol;
+	CVI_FLOAT f32Fps;	/* 0 = use enum default; IMX678 uses 15/20/25/30 */
 } SAMPLE_SENSOR_INFO_S;
 
 typedef enum _SAMPLE_VO_MODE_E {
@@ -639,6 +640,7 @@ typedef struct _SAMPLE_INI_CFG_S {
 	CVI_U8			u8AttachDev[VI_MAX_DEV_NUM];
 	CVI_S16			s16SwitchGpio[VI_MAX_DEV_NUM];
 	CVI_U8			u8SwitchPol[VI_MAX_DEV_NUM];
+	CVI_FLOAT		f32SnsFps[VI_MAX_DEV_NUM]; /* 0 = enum default */
 } SAMPLE_INI_CFG_S;
 
 /* Active sensor mode info derived from sensor_cfg.ini / SAMPLE_SNS_TYPE_E. */
@@ -657,6 +659,7 @@ typedef struct _SAMPLE_SNS_MODE_INFO_S {
 	CVI_U8			u8RawBitDepth;	/* 10 or 12 */
 	DATA_BITWIDTH_E		enViBitWidth;
 	PIXEL_FORMAT_E		enViPixFmt;
+	CVI_FLOAT		f32Fps;		/* active sensor fps */
 	const CVI_CHAR		*pszModeName;
 	const CVI_CHAR		*pszIspBinPath;
 } SAMPLE_SNS_MODE_INFO_S;

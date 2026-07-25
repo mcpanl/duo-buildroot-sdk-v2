@@ -1,10 +1,12 @@
 #!/bin/sh
-# Switch IMX678 default sensor mode and matching ISP PQ bin.
+# Switch IMX678 default sensor mode / fps and matching ISP PQ bin.
 # Usage:
 #   imx678-mode              # show current mode
 #   imx678-mode status       # detailed status
-#   imx678-mode 1080p        # 1080p 2x2 hardware binning (full FOV, RAW10)
-#   imx678-mode 5m           # 5MP center crop (2880x1620, RAW12)
+#   imx678-mode 1080p [fps]  # 1080p 2x2 hardware binning (full FOV, RAW10)
+#   imx678-mode 5m [fps]     # 5MP center crop (2880x1620, RAW12)
+#   imx678-mode fps <fps>    # keep current mode, change fps only
+# Supported fps: 15, 20, 25, 30 (default 30)
 
 SENSOR_CFG="${CVI_SENSOR_CFG:-/mnt/data/sensor_cfg.ini}"
 MODE_MARK="/mnt/data/imx678_mode"
@@ -16,12 +18,22 @@ PRESET_1080P="${PRESET_DIR}/sensor_cfg.ini.imx678_1080p_bin"
 PRESET_5M="${PRESET_DIR}/sensor_cfg.ini.imx678_5m"
 BIN_1080P="cvi_sdr_bin_IMX678_1080P_BIN"
 BIN_5M="cvi_sdr_bin_IMX678_5M"
+DEFAULT_FPS=30
 
 usage() {
-	echo "Usage: imx678-mode [status|1080p|5m]"
-	echo "  (no args)/status  show current IMX678 mode"
-	echo "  1080p             1080p 2x2 binning (default)"
-	echo "  5m                5MP center crop"
+	echo "Usage: imx678-mode [status|1080p|5m|fps] [15|20|25|30]"
+	echo "  (no args)/status  show current IMX678 mode and fps"
+	echo "  1080p [fps]       1080p 2x2 binning (default mode)"
+	echo "  5m [fps]          5MP center crop"
+	echo "  fps <fps>         keep mode, set fps only"
+	echo "  fps values: 15, 20, 25, 30 (default ${DEFAULT_FPS})"
+}
+
+valid_fps() {
+	case "$1" in
+	15|20|25|30) return 0 ;;
+	*) return 1 ;;
+	esac
 }
 
 detect_mode_from_ini() {
@@ -40,8 +52,38 @@ detect_mode_from_ini() {
 	fi
 }
 
+detect_fps_from_ini() {
+	cfg="$1"
+	fps=""
+	if [ -f "$cfg" ]; then
+		fps="$(grep -E '^[[:space:]]*fps[[:space:]]*=' "$cfg" 2>/dev/null | head -n1 | sed 's/.*=[[:space:]]*//;s/[[:space:]]*$//')"
+	fi
+	if valid_fps "$fps"; then
+		echo "$fps"
+	else
+		echo "$DEFAULT_FPS"
+	fi
+}
+
+set_fps_in_ini() {
+	cfg="$1"
+	fps="$2"
+	[ -f "$cfg" ] || return 1
+	if grep -qE '^[[:space:]]*fps[[:space:]]*=' "$cfg" 2>/dev/null; then
+		sed -i "s/^[[:space:]]*fps[[:space:]]*=.*/fps = ${fps}/" "$cfg"
+	else
+		# Insert after name= line inside [sensor]
+		if grep -qE '^[[:space:]]*name[[:space:]]*=' "$cfg" 2>/dev/null; then
+			sed -i "/^[[:space:]]*name[[:space:]]*=/a fps = ${fps}" "$cfg"
+		else
+			printf '\nfps = %s\n' "$fps" >> "$cfg"
+		fi
+	fi
+}
+
 show_status() {
 	mode="$(detect_mode_from_ini "$SENSOR_CFG")"
+	fps="$(detect_fps_from_ini "$SENSOR_CFG")"
 	mark=""
 	[ -f "$MODE_MARK" ] && mark="$(tr -d '\n' < "$MODE_MARK")"
 	bin_tgt=""
@@ -54,17 +96,25 @@ show_status() {
 	fi
 	echo "sensor_cfg: $SENSOR_CFG"
 	if [ -f "$SENSOR_CFG" ]; then
-		grep -E '^name|^;sensor' "$SENSOR_CFG" 2>/dev/null || true
+		grep -E '^name|^fps|^;sensor' "$SENSOR_CFG" 2>/dev/null || true
 	else
 		echo "  (file missing)"
 	fi
-	echo "detected:   $mode"
+	echo "detected:   $mode @ ${fps}fps"
 	[ -n "$mark" ] && echo "mark file:  $MODE_MARK ($mark)"
 	echo "isp bin:    $BIN_LINK -> $bin_tgt"
 }
 
 apply_mode() {
 	mode="$1"
+	fps="${2:-$DEFAULT_FPS}"
+
+	if ! valid_fps "$fps"; then
+		echo "invalid fps: $fps (use 15|20|25|30)" >&2
+		usage
+		return 1
+	fi
+
 	case "$mode" in
 	1080p|1080p_bin)
 		preset="$PRESET_1080P"
@@ -93,6 +143,7 @@ apply_mode() {
 
 	mkdir -p "$(dirname "$SENSOR_CFG")"
 	cp "$preset" "$SENSOR_CFG"
+	set_fps_in_ini "$SENSOR_CFG" "$fps" || return 1
 	echo "$mark" > "$MODE_MARK"
 
 	if [ -d "$PARAM_DIR" ]; then
@@ -104,10 +155,36 @@ apply_mode() {
 		fi
 	fi
 
-	echo "IMX678 mode set to $mark"
+	echo "IMX678 mode set to $mark @ ${fps}fps"
 	echo "  sensor_cfg <- $preset"
+	echo "  fps        = $fps"
 	echo "  isp bin    -> $bin_name"
 	echo "Restart camera apps (sample_sensor_lcd / CviIspTool / etc.) to apply."
+}
+
+apply_fps_only() {
+	fps="$1"
+	if ! valid_fps "$fps"; then
+		echo "invalid fps: $fps (use 15|20|25|30)" >&2
+		usage
+		return 1
+	fi
+	if [ ! -f "$SENSOR_CFG" ]; then
+		echo "sensor_cfg missing: $SENSOR_CFG" >&2
+		echo "Run: imx678-mode 1080p $fps   (or 5m) first" >&2
+		return 1
+	fi
+	mode="$(detect_mode_from_ini "$SENSOR_CFG")"
+	case "$mode" in
+	1080p_bin|5m|1080p_crop|imx678_other) ;;
+	*)
+		echo "current sensor_cfg is not IMX678 ($mode)" >&2
+		return 1
+		;;
+	esac
+	set_fps_in_ini "$SENSOR_CFG" "$fps" || return 1
+	echo "IMX678 fps set to ${fps} (mode=$mode)"
+	echo "Restart camera apps to apply."
 }
 
 cmd="${1:-status}"
@@ -119,7 +196,14 @@ status|"")
 	show_status
 	;;
 1080p|1080p_bin|5m)
-	apply_mode "$cmd" || exit 1
+	apply_mode "$cmd" "${2:-$DEFAULT_FPS}" || exit 1
+	;;
+fps)
+	if [ -z "${2:-}" ]; then
+		usage >&2
+		exit 1
+	fi
+	apply_fps_only "$2" || exit 1
 	;;
 *)
 	usage >&2

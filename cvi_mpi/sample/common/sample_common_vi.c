@@ -594,6 +594,8 @@ CVI_S32 SAMPLE_COMM_VI_StartDev(SAMPLE_VI_INFO_S *pstViInfo)
 
 	SAMPLE_COMM_VI_GetDevAttrBySns(enSnsType, &stViDevAttr);
 	SAMPLE_COMM_ISP_GetIspAttrBySns(enSnsType, &pstPubAttr);
+	if (pstViInfo->stSnsInfo.f32Fps > 0.01f)
+		pstPubAttr.f32FrameRate = pstViInfo->stSnsInfo.f32Fps;
 	stViDevAttr.stWDRAttr.enWDRMode = pstViInfo->stDevInfo.enWDRMode;
 	stViDevAttr.snrFps = (CVI_U32)pstPubAttr.f32FrameRate;
 
@@ -836,6 +838,8 @@ CVI_S32 SAMPLE_COMM_VI_StartIsp(SAMPLE_VI_INFO_S *pstViInfo)
 				return s32Ret;
 			}
 			SAMPLE_COMM_ISP_GetIspAttrBySns(pstViInfo->stSnsInfo.enSnsType, &stPubAttr);
+			if (pstViInfo->stSnsInfo.f32Fps > 0.01f)
+				stPubAttr.f32FrameRate = pstViInfo->stSnsInfo.f32Fps;
 			s32Ret = CVI_ISP_SetPubAttr(ViPipe, &stPubAttr);
 			if (s32Ret != CVI_SUCCESS) {
 				CVI_TRACE_LOG(CVI_DBG_ERR, "SetPubAttr failed with %#x!\n", s32Ret);
@@ -1062,6 +1066,8 @@ CVI_S32 SAMPLE_COMM_VI_IniToViCfg(SAMPLE_INI_CFG_S *pstIniCfg, SAMPLE_VI_CONFIG_
 		pstViConfig->astViInfo[s32WorkSnsId].stSnsInfo.s16SwitchGpio	=
 			pstIniCfg->s16SwitchGpio[s32WorkSnsId];
 		pstViConfig->astViInfo[s32WorkSnsId].stSnsInfo.u8SwitchPol	= pstIniCfg->u8SwitchPol[s32WorkSnsId];
+		pstViConfig->astViInfo[s32WorkSnsId].stSnsInfo.f32Fps		=
+			pstIniCfg->f32SnsFps[s32WorkSnsId];
 		pstViConfig->astViInfo[s32WorkSnsId].stSnsInfo.as16LaneId[0]	=
 			pstIniCfg->as16LaneId[s32WorkSnsId][0];
 		pstViConfig->astViInfo[s32WorkSnsId].stSnsInfo.as16LaneId[1]	=

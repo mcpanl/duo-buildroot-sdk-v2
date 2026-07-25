@@ -114,9 +114,10 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 		if (s32Ret != CVI_SUCCESS)
 			return s32Ret;
 		g_stSensorSize = stModeInfo.stSize;
-		SAMPLE_PRT("Sensor mode=%s size=%ux%u raw=%ubit snsMode=%u bin=%s\n",
+		SAMPLE_PRT("Sensor mode=%s size=%ux%u fps=%.0f raw=%ubit snsMode=%u bin=%s\n",
 			   stModeInfo.pszModeName,
 			   stModeInfo.stSize.u32Width, stModeInfo.stSize.u32Height,
+			   stModeInfo.f32Fps,
 			   stModeInfo.u8RawBitDepth, stModeInfo.u8SnsMode,
 			   stModeInfo.pszIspBinPath ? stModeInfo.pszIspBinPath : "(default)");
 	}

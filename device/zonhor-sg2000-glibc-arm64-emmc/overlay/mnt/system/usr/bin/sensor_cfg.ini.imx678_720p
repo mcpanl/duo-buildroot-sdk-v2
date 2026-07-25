@@ -6,6 +6,7 @@ dev_num = 1
 [sensor]
 ;sensor name (deprecated: 720p binning; use sensor_cfg.ini.imx678_1080p)
 name = SONY_IMX678_MIPI_2M_30FPS_12BIT
+fps = 30
 ;bus/i2c dev number
 bus_id = 3
 sns_i2c_addr = 26

@@ -37,7 +37,41 @@ static SAMPLE_INI_CFG_S	stDefIniCfg = {
 	.MipiDev[1]   = 0xFF,
 	.MipiDev[2]   = 0xFF,
 	.u8UseMultiSns = 0,
+	/* f32SnsFps[] left 0: use enum default in GetIspAttrBySns */
 };
+
+/* Cached from last successful SAMPLE_COMM_SNS_ParseIni(). */
+static CVI_FLOAT g_af32SnsFpsFromIni[VI_MAX_DEV_NUM];
+static SAMPLE_SNS_TYPE_E g_aenSnsTypeFromIni[VI_MAX_DEV_NUM];
+static CVI_U8 g_u8IniDevNum;
+
+static void sample_sns_cache_ini_fps(const SAMPLE_INI_CFG_S *cfg)
+{
+	CVI_U8 i, n;
+
+	if (!cfg)
+		return;
+	n = cfg->devNum;
+	if (n > VI_MAX_DEV_NUM)
+		n = VI_MAX_DEV_NUM;
+	g_u8IniDevNum = n;
+	for (i = 0; i < n; i++) {
+		g_aenSnsTypeFromIni[i] = cfg->enSnsType[i];
+		g_af32SnsFpsFromIni[i] = cfg->f32SnsFps[i];
+	}
+}
+
+static CVI_FLOAT sample_sns_lookup_ini_fps(SAMPLE_SNS_TYPE_E enSnsType)
+{
+	CVI_U8 i;
+
+	for (i = 0; i < g_u8IniDevNum; i++) {
+		if (g_aenSnsTypeFromIni[i] == enSnsType &&
+		    g_af32SnsFpsFromIni[i] > 0.01f)
+			return g_af32SnsFpsFromIni[i];
+	}
+	return 0;
+}
 
 // default is MIPI-CSI Bayer format sensor
 VI_DEV_ATTR_S DEV_ATTR_SENSOR_BASE = {
@@ -976,9 +1010,13 @@ CVI_S32 SAMPLE_COMM_SNS_GetIspAttrBySns(SAMPLE_SNS_TYPE_E enSnsType, ISP_PUB_ATT
 		break;
 	case SONY_IMX678_MIPI_8M_30FPS_12BIT:
 	case SONY_IMX678_MIPI_2M_30FPS_12BIT:
-	case SONY_IMX678_MIPI_2M_30FPS_10BIT_BIN:
-		pstPubAttr->f32FrameRate = 30;
+	case SONY_IMX678_MIPI_2M_30FPS_10BIT_BIN: {
+		CVI_FLOAT f32IniFps = sample_sns_lookup_ini_fps(enSnsType);
+
+		/* sensor_cfg.ini [sensor] fps=15|20|25|30 overrides enum default. */
+		pstPubAttr->f32FrameRate = (f32IniFps > 0.01f) ? f32IniFps : 30;
 		break;
+	}
 	case GCORE_GC0329_MIPI_480P_10FPS_8BIT:
 		pstPubAttr->f32FrameRate = 10;
 		break;
@@ -2085,6 +2123,25 @@ static void parse_sensor_switchpol(SAMPLE_INI_CFG_S *cfg, const char *value,
 	cfg->u8SwitchPol[index] = atoi(value);
 }
 
+static void parse_sensor_fps(SAMPLE_INI_CFG_S *cfg, const char *value,
+			     CVI_U32 param0, CVI_U32 param1, CVI_U32 param2)
+{
+	CVI_U32 index = param0;
+	CVI_FLOAT fps;
+
+	(CVI_VOID) param1;
+	(CVI_VOID) param2;
+	if (index >= VI_MAX_DEV_NUM)
+		return;
+	fps = (CVI_FLOAT)atof(value);
+	if (fps <= 0.01f) {
+		SAMPLE_PRT("ignore invalid fps=%s for sensor%u\n", value, index);
+		return;
+	}
+	SAMPLE_PRT("fps = %s\n", value);
+	cfg->f32SnsFps[index] = fps;
+}
+
  /* === Sensor section parser handler end === */
 typedef CVI_VOID(*parser)(SAMPLE_INI_CFG_S *cfg, const char *value,
 		CVI_U32 param0, CVI_U32 param1, CVI_U32 param2);
@@ -2118,6 +2175,7 @@ typedef enum _INI_SENSOR_NAME_E {
 	INI_SENSOR_ATTACHDEV,
 	INI_SENSOR_SWITCHGPIO,
 	INI_SENSOR_SWITCHPOL,
+	INI_SENSOR_FPS,
 	INI_SENSOR_NUM,
 } INI_SENSOR_NAME_E;
 
@@ -2141,6 +2199,7 @@ const INI_HDLR_S stSectionSensor1[INI_SENSOR_NUM] = {
 	[INI_SENSOR_ATTACHDEV] = {"attach_dev", 0, 0, 0, parse_sensor_attachdev},
 	[INI_SENSOR_SWITCHGPIO] = {"switch_gpio", 0, 0, 0, parse_sensor_switchgpio},
 	[INI_SENSOR_SWITCHPOL] = {"switch_pol", 0, 0, 0, parse_sensor_switchpol},
+	[INI_SENSOR_FPS] = {"fps", 0, 0, 0, parse_sensor_fps},
 };
 
 const INI_HDLR_S stSectionSensor2[INI_SENSOR_NUM] = {
@@ -2158,6 +2217,7 @@ const INI_HDLR_S stSectionSensor2[INI_SENSOR_NUM] = {
 	[INI_SENSOR_ATTACHDEV] = {"attach_dev", 1, 0, 0, parse_sensor_attachdev},
 	[INI_SENSOR_SWITCHGPIO] = {"switch_gpio", 1, 0, 0, parse_sensor_switchgpio},
 	[INI_SENSOR_SWITCHPOL] = {"switch_pol", 1, 0, 0, parse_sensor_switchpol},
+	[INI_SENSOR_FPS] = {"fps", 1, 0, 0, parse_sensor_fps},
 };
 
 const INI_HDLR_S stSectionSensor3[INI_SENSOR_NUM] = {
@@ -2175,6 +2235,7 @@ const INI_HDLR_S stSectionSensor3[INI_SENSOR_NUM] = {
 	[INI_SENSOR_ATTACHDEV] = {"attach_dev", 2, 0, 0, parse_sensor_attachdev},
 	[INI_SENSOR_SWITCHGPIO] = {"switch_gpio", 2, 0, 0, parse_sensor_switchgpio},
 	[INI_SENSOR_SWITCHPOL] = {"switch_pol", 2, 0, 0, parse_sensor_switchpol},
+	[INI_SENSOR_FPS] = {"fps", 2, 0, 0, parse_sensor_fps},
 };
 
 CVI_S32 SAMPLE_COMM_SNS_SetIniPath(const CVI_CHAR *iniPath)
@@ -2237,6 +2298,7 @@ CVI_S32 SAMPLE_COMM_SNS_ParseIni(SAMPLE_INI_CFG_S *pstIniCfg)
 		SAMPLE_PRT("Parse %s\n", g_snsCfgPath);
 		ret = ini_parse(g_snsCfgPath, parse_handler, pstIniCfg);
 		if (ret >= 0) {
+			sample_sns_cache_ini_fps(pstIniCfg);
 			return CVI_SUCCESS;
 		}
 		if (ret != -1) {
@@ -2249,6 +2311,7 @@ CVI_S32 SAMPLE_COMM_SNS_ParseIni(SAMPLE_INI_CFG_S *pstIniCfg)
 	SAMPLE_PRT("Parse %s\n", INI_FILE_PATH);
 	ret = ini_parse(INI_FILE_PATH, parse_handler, pstIniCfg);
 	if (ret >= 0) {
+		sample_sns_cache_ini_fps(pstIniCfg);
 		return CVI_SUCCESS;
 	}
 	if (ret != -1) {
@@ -2269,6 +2332,7 @@ CVI_S32 SAMPLE_COMM_SNS_ParseIni(SAMPLE_INI_CFG_S *pstIniCfg)
 		return CVI_FAILURE;
 	}
 
+	sample_sns_cache_ini_fps(pstIniCfg);
 	return CVI_SUCCESS;
 }
 
@@ -2299,6 +2363,14 @@ CVI_S32 SAMPLE_COMM_SNS_GetModeInfo(SAMPLE_SNS_TYPE_E enSnsType,
 	pstInfo->enViPixFmt = PIXEL_FORMAT_RGB_BAYER_12BPP;
 	pstInfo->pszModeName = "other";
 	pstInfo->pszIspBinPath = NULL;
+	{
+		ISP_PUB_ATTR_S stPubAttr;
+
+		if (SAMPLE_COMM_SNS_GetIspAttrBySns(enSnsType, &stPubAttr) == CVI_SUCCESS)
+			pstInfo->f32Fps = stPubAttr.f32FrameRate;
+		else
+			pstInfo->f32Fps = 30;
+	}
 
 	s32Ret = SAMPLE_COMM_SNS_GetSize(enSnsType, &enPicSize);
 	if (s32Ret != CVI_SUCCESS)
@@ -2347,10 +2419,19 @@ CVI_S32 SAMPLE_COMM_SNS_GetModeInfo(SAMPLE_SNS_TYPE_E enSnsType,
 CVI_S32 SAMPLE_COMM_SNS_QueryActiveMode(const SAMPLE_INI_CFG_S *pstIniCfg,
 					SAMPLE_SNS_MODE_INFO_S *pstInfo)
 {
+	CVI_S32 s32Ret;
+
 	if (!pstIniCfg || !pstInfo)
 		return CVI_FAILURE;
 
-	return SAMPLE_COMM_SNS_GetModeInfo(pstIniCfg->enSnsType[0], pstInfo);
+	s32Ret = SAMPLE_COMM_SNS_GetModeInfo(pstIniCfg->enSnsType[0], pstInfo);
+	if (s32Ret != CVI_SUCCESS)
+		return s32Ret;
+
+	if (pstIniCfg->f32SnsFps[0] > 0.01f)
+		pstInfo->f32Fps = pstIniCfg->f32SnsFps[0];
+
+	return CVI_SUCCESS;
 }
 
 CVI_S32 SAMPLE_COMM_SNS_QueryRuntimeMode(VI_PIPE ViPipe,
@@ -2372,6 +2453,7 @@ CVI_S32 SAMPLE_COMM_SNS_QueryRuntimeMode(VI_PIPE ViPipe,
 	pstInfo->stSize.u32Height = stPubAttr.stWndRect.u32Height ?
 		stPubAttr.stWndRect.u32Height : stPubAttr.stSnsSize.u32Height;
 	pstInfo->u8SnsMode = stPubAttr.u8SnsMode;
+	pstInfo->f32Fps = stPubAttr.f32FrameRate;
 
 	return CVI_SUCCESS;
 }

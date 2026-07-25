@@ -6,6 +6,7 @@ dev_num = 1
 [sensor]
 ;sensor name (4K init + center crop 2880x1620 for SG2000 5MP ISP)
 name = SONY_IMX678_MIPI_8M_30FPS_12BIT
+fps = 30
 ;bus/i2c dev number
 bus_id = 3
 sns_i2c_addr = 26

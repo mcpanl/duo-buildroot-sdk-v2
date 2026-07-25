@@ -707,6 +707,8 @@ CVI_S32 SAMPLE_COMM_ISP_SetSensorMode(SAMPLE_VI_CONFIG_S *pstViConfig)
 			CVI_TRACE_LOG(CVI_DBG_ERR, "Can't get sns attr!\n");
 			return s32Ret;
 		}
+		if (pstViInfo->stSnsInfo.f32Fps > 0.01f)
+			stPubAttr.f32FrameRate = pstViInfo->stSnsInfo.f32Fps;
 		stSnsrMode.u16Width = stPubAttr.stSnsSize.u32Width;
 		stSnsrMode.u16Height = stPubAttr.stSnsSize.u32Height;
 		stSnsrMode.f32Fps = stPubAttr.f32FrameRate;

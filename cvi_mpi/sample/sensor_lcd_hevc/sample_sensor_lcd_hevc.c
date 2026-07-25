@@ -102,6 +102,7 @@ static void enc_pick_5m_tier(CVI_U32 sensor_w, CVI_U32 sensor_h,
 
 static SAMPLE_VI_CONFIG_S g_stViConfig;
 static SIZE_S g_stSensorSize;
+static CVI_S32 g_sensor_fps = HEVC_REC_DEFAULT_FPS;
 static volatile sig_atomic_t g_running = 1;
 static CVI_BOOL g_sys_inited = CVI_FALSE;
 static CVI_BOOL g_vi_inited = CVI_FALSE;
@@ -347,9 +348,14 @@ static CVI_S32 sys_mm_init(CVI_BOOL mirror, CVI_BOOL flip)
 	if (s32Ret != CVI_SUCCESS)
 		return s32Ret;
 	g_stSensorSize = stModeInfo.stSize;
-	SAMPLE_PRT("Sensor mode=%s size=%ux%u raw=%ubit snsMode=%u bin=%s\n",
+	if (stModeInfo.f32Fps > 0.01f)
+		g_sensor_fps = (CVI_S32)(stModeInfo.f32Fps + 0.5f);
+	else
+		g_sensor_fps = HEVC_REC_DEFAULT_FPS;
+	SAMPLE_PRT("Sensor mode=%s size=%ux%u fps=%d raw=%ubit snsMode=%u bin=%s\n",
 		   stModeInfo.pszModeName,
 		   stModeInfo.stSize.u32Width, stModeInfo.stSize.u32Height,
+		   g_sensor_fps,
 		   stModeInfo.u8RawBitDepth, stModeInfo.u8SnsMode,
 		   stModeInfo.pszIspBinPath ? stModeInfo.pszIspBinPath : "(default)");
 
@@ -848,8 +854,8 @@ int main(int argc, char **argv)
 	} else {
 		rec_cfg.bitrate_kbps = bitrate;
 	}
-	rec_cfg.fps = HEVC_REC_DEFAULT_FPS;
-	rec_cfg.gop = HEVC_REC_DEFAULT_GOP;
+	rec_cfg.fps = g_sensor_fps > 0 ? g_sensor_fps : HEVC_REC_DEFAULT_FPS;
+	rec_cfg.gop = rec_cfg.fps; /* keep ~1s GOP when fps changes */
 	rec_cfg.vpss_grp = VPSS_GRP_MAIN;
 	rec_cfg.vpss_chn = VPSS_CHN_ENC;
 	rec_cfg.out_dir = out_dir;
