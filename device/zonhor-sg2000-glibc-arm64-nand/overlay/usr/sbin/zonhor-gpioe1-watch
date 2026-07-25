@@ -1,0 +1,31 @@
+#!/bin/sh
+# Continuously print GPIOE1 / PWR_GPIO1 level (RTC DW GPIO EXT_PORTA bit1).
+# Idle with external pull-up should be 1; pressed to GND should be 0.
+#
+# Usage:
+#   zonhor-gpioe1-watch          # 0.2s interval
+#   zonhor-gpioe1-watch 0.05     # faster
+
+REG=0x05021050
+INTERVAL="${1:-0.2}"
+
+devmem_r() {
+	if command -v busybox >/dev/null 2>&1; then
+		busybox devmem "$1" 32
+	else
+		devmem "$1" 32
+	fi
+}
+
+echo "watching GPIOE1 (bit1 of $REG), interval=${INTERVAL}s  Ctrl-C to stop"
+echo "time_s  EXT_PORTA   E1"
+n=0
+while true; do
+	v=$(devmem_r "$REG")
+	hv=${v#0x}
+	hv=${hv#0X}
+	bit=$(( (0x$hv >> 1) & 1 ))
+	printf "%6d  %-10s  %d\n" "$n" "$v" "$bit"
+	n=$((n + 1))
+	sleep "$INTERVAL"
+done

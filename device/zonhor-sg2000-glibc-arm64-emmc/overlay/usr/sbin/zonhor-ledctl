@@ -1,0 +1,182 @@
+#!/bin/sh
+#
+# Unified Zonhor status-LED control for three domains:
+#   linux  -> GPIOA29 sys-led (gpio-leds sysfs)
+#   rtos   -> GPIOA18 rtos-led (gpio-leds after Linux handoff; early RTOS blink)
+#   mcu    -> GPIOE0  PWR_GPIO0 (mcu51-ledctl / RTC_INFO mailbox)
+#
+# Usage:
+#   zonhor-ledctl <linux|rtos|mcu|all> <on|off|blink|release|status>
+#   zonhor-ledctl status
+#
+
+set -eu
+
+SYS_LED=/sys/class/leds/sys-led
+RTOS_LED=/sys/class/leds/rtos-led
+MCU_LEDCTL=/usr/sbin/mcu51-ledctl
+
+usage() {
+	cat >&2 <<EOF
+Usage: $0 <linux|rtos|mcu|all> <on|off|blink|release|status>
+       $0 status
+
+LEDs:
+  linux  GPIOA29 sys-led (default: activity trigger)
+  rtos   GPIOA18 rtos-led (default: timer blink after Linux up)
+  mcu    GPIOE0  MCU RTC-domain LED (default: blink)
+EOF
+}
+
+led_status_line() {
+	name=$1
+	path=$2
+	gpio=$3
+	if [ ! -d "$path" ]; then
+		echo "$name: gpio=$gpio MISSING ($path)"
+		return 1
+	fi
+	trig=$(cat "$path/trigger" 2>/dev/null | tr ' ' '\n' | sed -n 's/^\[\(.*\)\]$/\1/p' | head -n1)
+	bri=$(cat "$path/brightness" 2>/dev/null || echo '?')
+	echo "$name: gpio=$gpio trigger=${trig:-?} brightness=$bri"
+}
+
+led_set() {
+	path=$1
+	cmd=$2
+	release_trig=$3
+	blink_on=${4:-300}
+	blink_off=${5:-700}
+
+	if [ ! -d "$path" ]; then
+		echo "zonhor-ledctl: $path missing" >&2
+		return 1
+	fi
+	case "$cmd" in
+	on)
+		echo none > "$path/trigger"
+		echo 1 > "$path/brightness"
+		;;
+	off)
+		echo none > "$path/trigger"
+		echo 0 > "$path/brightness"
+		;;
+	blink)
+		echo timer > "$path/trigger"
+		if [ -f "$path/delay_on" ]; then
+			echo "$blink_on" > "$path/delay_on" 2>/dev/null || true
+			echo "$blink_off" > "$path/delay_off" 2>/dev/null || true
+		fi
+		;;
+	release)
+		echo "$release_trig" > "$path/trigger"
+		if [ "$release_trig" = "timer" ] && [ -f "$path/delay_on" ]; then
+			echo "$blink_on" > "$path/delay_on" 2>/dev/null || true
+			echo "$blink_off" > "$path/delay_off" 2>/dev/null || true
+		fi
+		;;
+	status)
+		return 0
+		;;
+	*)
+		usage
+		return 1
+		;;
+	esac
+}
+
+linux_led() {
+	cmd=$1
+	if [ "$cmd" = "status" ]; then
+		led_status_line linux "$SYS_LED" GPIOA29
+		return $?
+	fi
+	led_set "$SYS_LED" "$cmd" activity
+}
+
+rtos_led() {
+	cmd=$1
+	if [ "$cmd" = "status" ]; then
+		led_status_line rtos "$RTOS_LED" GPIOA18
+		return $?
+	fi
+	# Prefer Linux gpio-leds after handoff. Fall back to mailbox only if
+	# rtos-led class is absent (old image without DTS node).
+	if [ -d "$RTOS_LED" ]; then
+		led_set "$RTOS_LED" "$cmd" timer 300 700
+		return $?
+	fi
+
+	echo "zonhor-ledctl: $RTOS_LED missing (need DTS rtos-led); trying mailbox" >&2
+	if [ ! -e /dev/cvi-rtos-cmdqu ]; then
+		return 1
+	fi
+	python3 - "$cmd" <<'PY'
+import fcntl, os, struct, sys
+IP_DISPLAY, DISPLAY_CMD_LED, IOC = 8, 3, 0x40087201
+mode_map = {"release":0,"0":0,"default":0,"on":1,"1":1,"off":2,"2":2,"blink":3,"3":3}
+key = sys.argv[1]
+if key not in mode_map:
+    sys.exit(1)
+cmd = bytearray(8)
+cmd[0] = IP_DISPLAY
+cmd[1] = DISPLAY_CMD_LED
+struct.pack_into("<I", cmd, 4, mode_map[key])
+fd = os.open("/dev/cvi-rtos-cmdqu", os.O_RDWR)
+try:
+    fcntl.ioctl(fd, IOC, cmd)
+finally:
+    os.close(fd)
+print(f"rtos_led ioctl mode={key}")
+PY
+}
+
+mcu_led() {
+	cmd=$1
+	if [ ! -x "$MCU_LEDCTL" ]; then
+		echo "zonhor-ledctl: $MCU_LEDCTL missing" >&2
+		return 1
+	fi
+	case "$cmd" in
+	on|off|blink|release|status)
+		"$MCU_LEDCTL" "$cmd"
+		;;
+	*)
+		usage
+		return 1
+		;;
+	esac
+}
+
+do_one() {
+	target=$1
+	cmd=$2
+	case "$target" in
+	linux) linux_led "$cmd" ;;
+	rtos)  rtos_led "$cmd" ;;
+	mcu)   mcu_led "$cmd" ;;
+	all)
+		linux_led "$cmd" || true
+		rtos_led "$cmd" || true
+		mcu_led "$cmd" || true
+		;;
+	*)
+		usage
+		return 1
+		;;
+	esac
+}
+
+if [ $# -eq 1 ] && [ "$1" = "status" ]; then
+	linux_led status || true
+	rtos_led status || true
+	mcu_led status || true
+	exit 0
+fi
+
+if [ $# -lt 2 ]; then
+	usage
+	exit 1
+fi
+
+do_one "$1" "$2"

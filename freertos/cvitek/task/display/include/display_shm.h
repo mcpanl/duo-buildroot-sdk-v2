@@ -39,7 +39,17 @@ enum display_cmd_id {
 	DISPLAY_CMD_FLUSH = 0,
 	DISPLAY_CMD_BL,		/* param_ptr = brightness 0..100 */
 	DISPLAY_CMD_MIRROR,
+	/* param_ptr: 0=release/default blink, 1=on, 2=off, 3=blink */
+	DISPLAY_CMD_LED,
 	DISPLAY_CMD_LIMIT,
+};
+
+/* DISPLAY_CMD_LED param_ptr values (GPIOA18 RTOS status LED) */
+enum display_led_mode {
+	DISPLAY_LED_RELEASE = 0,
+	DISPLAY_LED_ON = 1,
+	DISPLAY_LED_OFF = 2,
+	DISPLAY_LED_BLINK = 3,
 };
 
 struct display_shm {

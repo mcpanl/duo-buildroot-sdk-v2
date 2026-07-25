@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# USER_LED (user-led) status indicator for OTA.
+# SYS_LED (sys-led) status indicator for OTA.
 #
 # Modes (blink frequency):
 #   staged   - 1 Hz  : upgrade staged, waiting for reboot
@@ -16,7 +16,7 @@
 #   zonhor-ota-led.sh error
 #
 
-LED_NAME="${ZONHOR_USER_LED:-user-led}"
+LED_NAME="${ZONHOR_USER_LED:-sys-led}"
 LED_SYSFS="/sys/class/leds/$LED_NAME"
 PID_FILE="${ZONHOR_OTA_LED_PID:-/var/run/zonhor-ota-led.pid}"
 

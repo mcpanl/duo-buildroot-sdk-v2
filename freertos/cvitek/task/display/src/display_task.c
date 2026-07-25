@@ -14,6 +14,7 @@
 #include "display_shm.h"
 #include "jd9853_panel.h"
 #include "display_main.h"
+#include "rtos_led.h"
 
 static struct display_shm *g_shm;
 static QueueHandle_t xQueueDisplay;
@@ -340,6 +341,9 @@ void prvDisplayRunTask(void *pvParameters)
 	xQueueDisplay = main_GetMODHandle(E_QUEUE_DISPLAY);
 	printf("display: task start\n");
 
+	/* Independent GPIOA18 status blink; Linux can override via DISPLAY_CMD_LED. */
+	rtos_led_start();
+
 	if (display_wait_shm() != 0) {
 		for (;;)
 			vTaskDelay(pdMS_TO_TICKS(1000));
@@ -404,6 +408,9 @@ void prvDisplayRunTask(void *pvParameters)
 						if (g_shm->dirty)
 							display_flush_frame();
 					}
+					break;
+				case DISPLAY_CMD_LED:
+					rtos_led_set_mode(rtos_cmdq.param_ptr);
 					break;
 				default:
 					break;

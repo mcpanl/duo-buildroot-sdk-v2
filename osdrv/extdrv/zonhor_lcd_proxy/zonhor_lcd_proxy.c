@@ -301,6 +301,54 @@ static ssize_t mirror_y_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RW(mirror_y);
 
+static void zonhor_lcd_rtos_led_send(unsigned int mode)
+{
+	cmdqu_t cmdq = { 0 };
+
+	cmdq.ip_id = IP_DISPLAY;
+	cmdq.cmd_id = DISPLAY_CMD_LED;
+	cmdq.resv.valid.linux_valid = 1;
+	cmdq.param_ptr = mode;
+	(void)rtos_cmdqu_send(&cmdq);
+}
+
+static ssize_t rtos_led_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	return sysfs_emit(buf,
+		"usage: echo on|off|blink|release > rtos_led\n"
+		"modes: 0=release/blink 1=on 2=off 3=blink\n");
+}
+
+static ssize_t rtos_led_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	unsigned int mode = DISPLAY_LED_RELEASE;
+	char cmd[16];
+	size_t n = count < sizeof(cmd) - 1 ? count : sizeof(cmd) - 1;
+
+	memcpy(cmd, buf, n);
+	cmd[n] = '\0';
+	while (n && (cmd[n - 1] == '\n' || cmd[n - 1] == ' '))
+		cmd[--n] = '\0';
+
+	if (!strcmp(cmd, "on") || !strcmp(cmd, "1"))
+		mode = DISPLAY_LED_ON;
+	else if (!strcmp(cmd, "off") || !strcmp(cmd, "2"))
+		mode = DISPLAY_LED_OFF;
+	else if (!strcmp(cmd, "blink") || !strcmp(cmd, "3"))
+		mode = DISPLAY_LED_BLINK;
+	else if (!strcmp(cmd, "release") || !strcmp(cmd, "0") ||
+		 !strcmp(cmd, "default"))
+		mode = DISPLAY_LED_RELEASE;
+	else
+		return -EINVAL;
+
+	zonhor_lcd_rtos_led_send(mode);
+	return count;
+}
+static DEVICE_ATTR_RW(rtos_led);
+
 /* ---- RTOS stats debugfs ---- */
 
 static struct rtos_stats_shm *zonhor_stats_ptr(struct zonhor_lcd *lcd)
@@ -695,6 +743,7 @@ static int zonhor_lcd_probe(struct platform_device *pdev)
 	device_create_file(dev, &dev_attr_flush);
 	device_create_file(dev, &dev_attr_mirror_x);
 	device_create_file(dev, &dev_attr_mirror_y);
+	device_create_file(dev, &dev_attr_rtos_led);
 
 	zonhor_stats_debugfs_init(lcd);
 
@@ -718,6 +767,7 @@ static int zonhor_lcd_remove(struct platform_device *pdev)
 	device_remove_file(&pdev->dev, &dev_attr_flush);
 	device_remove_file(&pdev->dev, &dev_attr_mirror_x);
 	device_remove_file(&pdev->dev, &dev_attr_mirror_y);
+	device_remove_file(&pdev->dev, &dev_attr_rtos_led);
 	g_lcd = NULL;
 	unregister_framebuffer(lcd->info);
 	fb_deferred_io_cleanup(lcd->info);
